@@ -9,8 +9,15 @@ Object.assign(process.env, {
 });
 
 const { closeDb, get, migrate, run } = await import("../src/server/db.ts");
-const { DEFAULT_AI_SETTINGS, reviewItems, saveAiSettings } = await import("../src/server/enrich/ai-settings.ts");
+const {
+  DEFAULT_AI_SETTINGS,
+  aiSummaryExcerpt,
+  buildChatCompletionBody,
+  reviewItems,
+  saveAiSettings,
+} = await import("../src/server/enrich/ai-settings.ts");
 const { reviewFreshNow } = await import("../src/server/enrich/ai-queue.ts");
+const { findSemanticDuplicatesWithAi } = await import("../src/server/enrich/ai-dedup.ts");
 
 const settings = {
   ...DEFAULT_AI_SETTINGS,
@@ -145,4 +152,138 @@ test("无效返回重试成功后使用完整的有效批次", async (t) => {
   const result = await reviewItems(items.slice(0, 2), settings);
   assert.equal(attempt, 2);
   assert.equal(result?.size, 2);
+});
+
+test("推理模型后缀 gpt-6.1-terra:xhigh 自动拆解 reasoning_effort 且省略 temperature（审核与去重共用）", async (t) => {
+  const bodies: Array<Record<string, unknown>> = [];
+  t.mock.method(globalThis, "fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown> & { messages: { content: string }[] };
+    bodies.push(body);
+    const payload = JSON.parse(body.messages[1]!.content) as PayloadItem[];
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(verdicts(payload)) } }] }), {
+      headers: { "content-type": "application/json" },
+    });
+  });
+
+  const reasoningSettings = { ...settings, model: "gpt-6.1-terra:xhigh", timeoutSec: 90 };
+  const saved = saveAiSettings({ timeoutSec: 90 });
+  assert.equal(saved.timeoutSec, 90);
+  assert.equal(saveAiSettings({ timeoutSec: 200 }).timeoutSec, 120);
+  saveAiSettings(settings);
+
+  const direct = buildChatCompletionBody({
+    model: "o4-mini@high",
+    messages: [{ role: "user", content: "hi" }],
+  });
+  assert.equal(direct.model, "o4-mini");
+  assert.equal(direct.reasoning_effort, "high");
+  assert.equal("temperature" in direct, false);
+
+  const result = await reviewItems(items.slice(0, 1), reasoningSettings);
+  assert.equal(result?.size, 1);
+  assert.equal(bodies.length, 1);
+  assert.equal(bodies[0]!.model, "gpt-6.1-terra");
+  assert.equal(bodies[0]!.reasoning_effort, "xhigh");
+  assert.equal("temperature" in bodies[0]!, false);
+
+  const dedupBodies: Array<Record<string, unknown>> = [];
+  const fakeDedupFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    dedupBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), {
+      headers: { "content-type": "application/json" },
+    });
+  }) as unknown as typeof fetch;
+
+  await findSemanticDuplicatesWithAi(
+    [{ id: 101, title: "生财实战复盘 A" }],
+    [{ id: 100, title: "生财实战复盘 B" }],
+    reasoningSettings,
+    fakeDedupFetch,
+  );
+  assert.equal(dedupBodies.length, 1);
+  assert.equal(dedupBodies[0]!.model, "gpt-6.1-terra");
+  assert.equal(dedupBodies[0]!.reasoning_effort, "xhigh");
+  assert.equal("temperature" in dedupBodies[0]!, false);
+});
+
+test("普通未知模型遇 HTTP 400 temperature 不支持错误时自动去掉 temperature 重试成功", async (t) => {
+  const sentBodies: Array<Record<string, unknown>> = [];
+  t.mock.method(globalThis, "fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown> & { messages: { content: string }[] };
+    sentBodies.push(body);
+    if (sentBodies.length === 1) {
+      return new Response(
+        JSON.stringify({ error: { message: "Unsupported value: 'temperature' does not support 0 with this model." } }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      );
+    }
+    const payload = JSON.parse(body.messages[1]!.content) as PayloadItem[];
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(verdicts(payload)) } }] }), {
+      headers: { "content-type": "application/json" },
+    });
+  });
+
+  const result = await reviewItems(items.slice(0, 1), { ...settings, model: "custom-unknown-model" });
+  assert.equal(result?.size, 1);
+  assert.equal(sentBodies.length, 2);
+  assert.equal(sentBodies[0]!.model, "custom-unknown-model");
+  assert.equal(sentBodies[0]!.temperature, 0);
+  assert.equal(sentBodies[1]!.model, "custom-unknown-model");
+  assert.equal("temperature" in sentBodies[1]!, false);
+});
+
+test("生财长文脱水默认参数与 2000 字正文截断策略 (aiSummaryExcerpt)", async (t) => {
+  assert.equal(DEFAULT_AI_SETTINGS.baseUrl, "https://api.openai.com/v1");
+  assert.equal(DEFAULT_AI_SETTINGS.model, "gpt-6.1-terra:high");
+  assert.equal(DEFAULT_AI_SETTINGS.batchSize, 4);
+  assert.equal(DEFAULT_AI_SETTINGS.concurrency, 3);
+  assert.equal(DEFAULT_AI_SETTINGS.timeoutSec, 75);
+
+  const exact2000 = "A".repeat(2000);
+  assert.equal(aiSummaryExcerpt({ content: exact2000 }), exact2000);
+
+  const head = "HEAD_SOP_".padEnd(1550, "B");
+  const middle = "MID_".padEnd(500, "M");
+  const tail = "_TAIL_CTA".padStart(420, "C");
+  const longContent = `${head}${middle}${tail}`;
+  const excerpt = aiSummaryExcerpt({ content: longContent });
+  assert.equal(excerpt, `${head} … ${tail}`);
+
+  const sentPayloads: PayloadItem[][] = [];
+  t.mock.method(globalThis, "fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as { messages: { content: string }[] };
+    const payload = JSON.parse(body.messages[1]!.content) as PayloadItem[];
+    sentPayloads.push(payload);
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(verdicts(payload)) } }] }), {
+      headers: { "content-type": "application/json" },
+    });
+  });
+
+  await reviewItems([{ ...items[0]!, content: longContent }], settings);
+  assert.equal(sentPayloads.length, 1);
+  assert.equal(sentPayloads[0]![0]!.summary, `${head} … ${tail}`);
+});
+
+test("scys-preset 升级旧版默认生财源 maxDetailPerRun 与默认 AI 档位", async () => {
+  const { ensureSources } = await import("../src/server/collectors/index.ts");
+  const { applyScysPreset } = await import("../scripts/scys-preset.ts");
+
+  ensureSources();
+  // 模拟旧库：scys-* 仍保留旧默认 maxDetailPerRun，AI 配置仍保留旧默认参数
+  run("UPDATE sources SET config = ? WHERE id = 'scys-highlights'", JSON.stringify({ mode: "highlights", pageSize: 15, fetchDetail: true, maxDetailPerRun: 8 }));
+  run("UPDATE sources SET config = ? WHERE id = 'scys-latest'", JSON.stringify({ mode: "latest", pageSize: 20, fetchDetail: true, maxDetailPerRun: 10 }));
+  saveAiSettings({ baseUrl: "", model: "", batchSize: 6, concurrency: 4, timeoutSec: 45 });
+
+  const out = applyScysPreset();
+  assert.equal(out.upgradedConfigs, 2);
+  assert.equal(out.aiModel, "gpt-6.1-terra:high");
+  assert.equal(out.aiBatchSize, 4);
+  assert.equal(out.aiConcurrency, 3);
+  assert.equal(out.aiTimeoutSec, 75);
+
+  const highlightsCfg = JSON.parse(get<{ config: string }>("SELECT config FROM sources WHERE id = 'scys-highlights'")!.config) as { pageSize: number; maxDetailPerRun: number };
+  const latestCfg = JSON.parse(get<{ config: string }>("SELECT config FROM sources WHERE id = 'scys-latest'")!.config) as { pageSize: number; maxDetailPerRun: number };
+  assert.deepEqual(highlightsCfg, { mode: "highlights", pageSize: 15, fetchDetail: true, maxDetailPerRun: 15 });
+  assert.deepEqual(latestCfg, { mode: "latest", pageSize: 15, fetchDetail: true, maxDetailPerRun: 15 });
+  saveAiSettings(settings);
 });

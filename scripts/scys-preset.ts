@@ -1,6 +1,6 @@
 import { all, closeDb, migrate, run } from "../src/server/db.ts";
-import { ensureSources } from "../src/server/collectors/index.ts";
-import { getAiSettings, saveAiSettings } from "../src/server/enrich/ai.ts";
+import { SEEDS, ensureSources } from "../src/server/collectors/index.ts";
+import { getAiSettings, saveAiSettings, type AiSettings } from "../src/server/enrich/ai.ts";
 import { CATEGORY_DESC, CATEGORY_KEYS, CONTENT_KIND_KEYS, OBTAIN_KEYS } from "../src/shared/taxonomy.ts";
 
 const SCYS_SYSTEM_PROMPT = [
@@ -10,7 +10,7 @@ const SCYS_SYSTEM_PROMPT = [
   `1. opensource（开源项目）：明确提供 GitHub/GitLab/Gitee 仓库地址、开源 Agent/MCP/脚本源码或可部署自托管代码的项目分享。`,
   `2. freebie（白嫖福利）：真正免费且无需加微/私域引流即可直接领取或使用的工具额度、模板、开源福利或免费资源。`,
   `3. deal（特价好价）：价格与权益透明的工具优惠、合租/服务对接或资源合作。`,
-  `4. info（实战干货）：具备可执行 SOP、真实营收与成本拆解、踩坑复盘、AI Coding / 独立开发 SaaS / 流量增长工作流、项目库案例深度分析。`,
+  `4. info（实战干货）：具备可执行 SOP、真实营收与成本拆解、踩坑复盘、AI Coding / 独立开发 SaaS / 流量增长工作流，以及含商业逻辑、变现路径、成本与收入测算的项目库拆解（含商业逻辑、变现路径、成本与收入测算的项目库案例同样属于有效 info）。`,
   "",
   "判定 keep=false 且 kind='noise' 的噪音水帖（坚决拦截）：",
   "- 纯晒单喜报：只晒收益截图、成交截图或情绪炫耀，没有可复现步骤与关键参数；",
@@ -62,13 +62,43 @@ export function applyScysPreset() {
   const placeholders = ENABLED_SCYS_IDS.map(() => "?").join(", ");
   const enabledScys = run(`UPDATE sources SET enabled = 1 WHERE id IN (${placeholders}) AND enabled != 1`, ...ENABLED_SCYS_IDS).changes;
 
-  // 只传入脱水策略字段，保留用户已配好的 baseUrl / apiKey / model / enabled
-  const ai = saveAiSettings({
+  // 升级旧版默认 maxDetailPerRun (8/10/6) 的生财源配置为完整单轮抓详情，保留用户其他自定义改写
+  const legacyDefaults: Record<string, { pageSize: number; maxDetailPerRun: number }> = {
+    "scys-highlights": { pageSize: 15, maxDetailPerRun: 8 },
+    "scys-projects": { pageSize: 15, maxDetailPerRun: 8 },
+    "scys-latest": { pageSize: 20, maxDetailPerRun: 10 },
+    "scys-manuals": { pageSize: 15, maxDetailPerRun: 6 },
+  };
+  let upgradedConfigs = 0;
+  for (const row of all<{ id: string; config: string }>("SELECT id, config FROM sources WHERE id LIKE 'scys-%'")) {
+    const legacy = legacyDefaults[row.id];
+    const seedCfg = SEEDS.find((s) => s.id === row.id)?.config;
+    if (!legacy || !seedCfg) continue;
+    try {
+      const curCfg = JSON.parse(row.config || "{}") as Record<string, unknown>;
+      if (curCfg.pageSize === legacy.pageSize && curCfg.maxDetailPerRun === legacy.maxDetailPerRun) {
+        run("UPDATE sources SET config = ? WHERE id = ?", JSON.stringify(seedCfg), row.id);
+        upgradedConfigs += 1;
+      }
+    } catch {
+      /* 忽略异常 JSON */
+    }
+  }
+
+  // 只传入脱水策略字段；若尚未配置自定义 baseUrl/model，填入官方推理默认参数并保留已有 apiKey/enabled
+  const curAi = getAiSettings();
+  const aiPatch: Partial<AiSettings> = {
     systemPrompt: SCYS_SYSTEM_PROMPT,
     customNoiseKeywords: SCYS_CUSTOM_NOISE_KEYWORDS,
     preFilterEnabled: true,
     learnFromFeedback: true,
-  });
+    ...(!curAi.baseUrl.trim() ? { baseUrl: "https://api.openai.com/v1" } : {}),
+    ...(!curAi.model.trim() ? { model: "gpt-6.1-terra:high" } : {}),
+    ...(curAi.batchSize === 6 ? { batchSize: 4 } : {}),
+    ...(curAi.concurrency === 4 ? { concurrency: 3 } : {}),
+    ...(curAi.timeoutSec === 15 || curAi.timeoutSec === 45 ? { timeoutSec: 75 } : {}),
+  };
+  const ai = saveAiSettings(aiPatch);
 
   const now = new Date().toISOString();
   let rulesInserted = 0;
@@ -91,12 +121,17 @@ export function applyScysPreset() {
     schemaVersion: version,
     disabledNonScys,
     enabledScys,
+    upgradedConfigs,
     activeSources,
     rulesInserted,
     totalBlockRules: SCYS_BLOCK_RULES.length,
-    aiConfigured: Boolean(currentAi.baseUrl && currentAi.model),
+    aiConfigured: Boolean(currentAi.baseUrl && currentAi.model && currentAi.apiKey),
     aiEnabled: ai.enabled,
+    aiBaseUrl: currentAi.baseUrl,
     aiModel: currentAi.model || "(未配置)",
+    aiBatchSize: currentAi.batchSize,
+    aiConcurrency: currentAi.concurrency,
+    aiTimeoutSec: currentAi.timeoutSec,
   };
 }
 
@@ -105,13 +140,15 @@ if (isMain) {
   try {
     const summary = applyScysPreset();
     console.log(`[scys-preset] schema v${summary.schemaVersion} ready`);
-    console.log(`[scys-preset] 已关闭非生财源 (${summary.disabledNonScys} 条变更)，启用生财源：`);
+    console.log(`[scys-preset] 已关闭非生财源 (${summary.disabledNonScys} 条变更)，升级生财源配置 ${summary.upgradedConfigs} 条，启用生财源：`);
     for (const s of summary.activeSources) {
       console.log(`  - ${s.id}: ${s.name}`);
     }
-    console.log(`[scys-preset] 已写入生财有术脱水 AI 提示词与噪音过滤（model=${summary.aiModel}, enabled=${summary.aiEnabled}）`);
-    if (!summary.aiConfigured) {
-      console.log("[scys-preset] 提示：尚未配置 AI_BASE_URL / AI_MODEL，请在界面「AI 审核」或 .env 中配置后开启自动脱水。");
+    console.log(
+      `[scys-preset] 已写入生财有术脱水 AI 提示词与噪音过滤（baseUrl=${summary.aiBaseUrl}, model=${summary.aiModel}, batchSize=${summary.aiBatchSize}, concurrency=${summary.aiConcurrency}, timeoutSec=${summary.aiTimeoutSec}, enabled=${summary.aiEnabled}）`,
+    );
+    if (!summary.aiConfigured || !summary.aiEnabled) {
+      console.log("[scys-preset] 提示：请在界面「AI 引擎」或 .env 中填入 AI_API_KEY 并开启总开关后启用自动脱水。");
     }
     console.log(`[scys-preset] 全局屏蔽规则新增 ${summary.rulesInserted} 条（预设共 ${summary.totalBlockRules} 条，重复执行幂等）`);
   } finally {

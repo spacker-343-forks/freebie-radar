@@ -113,13 +113,13 @@ const DEFAULT_PROMPT = [
 
 export const DEFAULT_AI_SETTINGS: AiSettings = {
   enabled: Boolean(config.aiBaseUrl && config.aiModel),
-  baseUrl: config.aiBaseUrl,
+  baseUrl: config.aiBaseUrl || "https://api.openai.com/v1",
   apiKey: config.aiApiKey,
-  model: config.aiModel,
+  model: config.aiModel || "gpt-6.1-terra:high",
   maxItems: Math.min(Math.max(config.aiMaxItems, 20), 500),
-  batchSize: 6,
-  concurrency: 4,
-  timeoutSec: 15,
+  batchSize: 4,
+  concurrency: 3,
+  timeoutSec: 75,
   preFilterEnabled: true,
   customNoiseKeywords: [],
   skipFreebieSources: false,
@@ -167,7 +167,7 @@ function normalizeSettings(raw: Partial<AiSettings>, base: AiSettings): AiSettin
     maxItems: numOr(raw.maxItems, base.maxItems, 20, 500),
     batchSize: numOr(raw.batchSize, base.batchSize, 2, 20),
     concurrency: numOr(raw.concurrency, base.concurrency, 1, 8),
-    timeoutSec: numOr(raw.timeoutSec, base.timeoutSec, 5, 60),
+    timeoutSec: numOr(raw.timeoutSec, base.timeoutSec, 5, 120),
     preFilterEnabled: typeof raw.preFilterEnabled === "boolean" ? raw.preFilterEnabled : base.preFilterEnabled,
     customNoiseKeywords: "customNoiseKeywords" in raw ? normalizeStringList(raw.customNoiseKeywords) : base.customNoiseKeywords,
     skipFreebieSources: typeof raw.skipFreebieSources === "boolean" ? raw.skipFreebieSources : base.skipFreebieSources,
@@ -329,34 +329,121 @@ function buildSystemPrompt(s: AiSettings): string {
 
 type CallResult = { map: Map<number, AiVerdict>; ttfbMs: number };
 
+export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
+const REASONING_EFFORTS = new Set<string>(["low", "medium", "high", "xhigh"]);
+const REASONING_MODEL_RE = /^(o\d|gpt-[5-9]|gpt-\d{2})/i;
+
+export type ChatCompletionMessage = {
+  role: "system" | "user" | "assistant";
+  content: string;
+};
+
+/** Parse `<model>:<effort>` or `<model>@<effort>` and identify reasoning models that reject temperature=0. */
+export function parseModelSpec(rawModel: string): {
+  model: string;
+  reasoningEffort?: ReasoningEffort;
+  isReasoningModel: boolean;
+} {
+  const trimmed = rawModel.trim();
+  const match = /^(.+?)[:@](low|medium|high|xhigh)$/i.exec(trimmed);
+  const model = match ? match[1]!.trim() : trimmed;
+  const effortRaw = match?.[2]?.toLowerCase();
+  const reasoningEffort =
+    effortRaw && REASONING_EFFORTS.has(effortRaw) ? (effortRaw as ReasoningEffort) : undefined;
+  const isReasoningModel = Boolean(reasoningEffort) || REASONING_MODEL_RE.test(model);
+  return { model, reasoningEffort, isReasoningModel };
+}
+
+/** Build OpenAI chat completions payload, omitting temperature for reasoning models and attaching reasoning_effort. */
+export function buildChatCompletionBody(options: {
+  model: string;
+  messages: ChatCompletionMessage[];
+  omitTemperature?: boolean;
+}): Record<string, unknown> {
+  const parsed = parseModelSpec(options.model);
+  const body: Record<string, unknown> = {
+    model: parsed.model,
+    messages: options.messages,
+  };
+  if (parsed.reasoningEffort) {
+    body.reasoning_effort = parsed.reasoningEffort;
+  }
+  if (!options.omitTemperature && !parsed.isReasoningModel) {
+    body.temperature = 0;
+  }
+  return body;
+}
+
+/** Send chat completions request and automatically retry once without temperature if HTTP 400 rejects temperature. */
+export async function postChatCompletions(params: {
+  baseUrl: string;
+  apiKey?: string;
+  model: string;
+  messages: ChatCompletionMessage[];
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
+}): Promise<{ res: Response; ttfbMs: number }> {
+  const endpoint = params.baseUrl.replace(/\/+$/, "") + "/chat/completions";
+  const fetcher = params.fetchImpl ?? fetch;
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    ...(params.apiKey ? { authorization: "Bearer " + params.apiKey } : {}),
+  };
+  const send = async (omitTemperature: boolean) => {
+    const t0 = Date.now();
+    const res = await fetcher(endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(
+        buildChatCompletionBody({
+          model: params.model,
+          messages: params.messages,
+          omitTemperature,
+        }),
+      ),
+      signal: params.signal,
+    });
+    return { res, ttfbMs: Date.now() - t0 };
+  };
+
+  const first = await send(false);
+  if (first.res.status !== 400 || parseModelSpec(params.model).isReasoningModel) {
+    return first;
+  }
+  const errBody = await first.res.text();
+  if (/temperature/i.test(errBody)) {
+    return await send(true);
+  }
+  return {
+    res: new Response(errBody, {
+      status: first.res.status,
+      statusText: first.res.statusText,
+      headers: first.res.headers,
+    }),
+    ttfbMs: first.ttfbMs,
+  };
+}
+
 async function callOnce(
   payload: { index: number; title: string; summary: string }[],
   s: AiSettings,
 ): Promise<CallResult> {
-  const endpoint = s.baseUrl.replace(/\/+$/, "") + "/chat/completions";
   const timeoutMs = s.timeoutSec * 1000;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   const t0 = Date.now();
   const tag = `[ai] batch n=${payload.length} idx=${payload[0]?.index ?? "-"}`;
   try {
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(s.apiKey ? { authorization: "Bearer " + s.apiKey } : {}),
-      },
-      body: JSON.stringify({
-        model: s.model,
-        temperature: 0,
-        messages: [
-          { role: "system", content: buildSystemPrompt(s) },
-          { role: "user", content: JSON.stringify(payload) },
-        ],
-      }),
+    const { res, ttfbMs: ttfb } = await postChatCompletions({
+      baseUrl: s.baseUrl,
+      apiKey: s.apiKey,
+      model: s.model,
+      messages: [
+        { role: "system", content: buildSystemPrompt(s) },
+        { role: "user", content: JSON.stringify(payload) },
+      ],
       signal: ac.signal,
     });
-    const ttfb = Date.now() - t0;
     if (!res.ok) throw new Error("AI HTTP " + res.status + " " + (await res.text()).slice(0, 120));
     const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
     console.log(`${tag} 完成 ${Date.now() - t0}ms（响应头 ${ttfb}ms）`);
@@ -409,10 +496,10 @@ export type ReviewBatchEvent = {
   error?: string;
 };
 
-function aiSummaryExcerpt(it: { summary?: string | null; content?: string | null }): string {
+export function aiSummaryExcerpt(it: { summary?: string | null; content?: string | null }): string {
   const raw = (it.content || it.summary || "").replace(/\s+/g, " ").trim();
-  if (raw.length <= 420) return raw;
-  return `${raw.slice(0, 240)} … ${raw.slice(-170)}`;
+  if (raw.length <= 2000) return raw;
+  return `${raw.slice(0, 1550)} … ${raw.slice(-420)}`;
 }
 
 /**

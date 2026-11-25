@@ -955,11 +955,11 @@ export function AiPanel({
             />
           </label>
           <label className="block rounded-lg border border-ink-200 bg-surface-hover p-3">
-            <span className="mb-1 block text-[12px] font-medium text-ink-700">{t("单批超时秒数 (5~60)")}</span>
+            <span className="mb-1 block text-[12px] font-medium text-ink-700">{t("单批超时秒数 (5~120)")}</span>
             <input
               type="number"
               min={5}
-              max={60}
+              max={120}
               value={form.timeoutSec}
               onChange={(e) => setForm({ ...form, timeoutSec: Number(e.target.value) })}
               className="w-full rounded-lg border border-ink-200 bg-surface px-2.5 py-1 font-mono text-[12px] text-ink-900 outline-none focus:border-brand"

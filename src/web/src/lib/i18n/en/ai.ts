@@ -115,7 +115,7 @@ export const EN_AI: Record<string, string> = {
   "单次调用上限 (20~500)": "Per-call limit (20~500)",
   "每批条数 (2~20)": "Items per batch (2~20)",
   "并发批数 (1~8)": "Concurrent batches (1~8)",
-  "单批超时秒数 (5~60)": "Batch timeout in seconds (5~60)",
+  "单批超时秒数 (5~120)": "Batch timeout in seconds (5~120)",
   "当前分波节奏：每次 HTTP 请求打包 ": "Current batching: each HTTP request packs ",
   " 条 ×": " items ×",
   " 并发 = 每波": " concurrent = ",

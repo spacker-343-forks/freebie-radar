@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 
-// 在导入 db/config 前强制走内存库，避免污染本地 data/radar.db
-process.env.DATABASE_PATH = ":memory:";
+// 在导入 db/config 前强制走内存库并屏蔽本机 .env AI/推送开关，避免测试结果随 .env 漂移或发起外网请求
+Object.assign(process.env, {
+  DATABASE_PATH: ":memory:",
+  AI_BASE_URL: "",
+  AI_MODEL: "",
+  AI_API_KEY: "",
+  PUSH_CHANNEL: "none",
+  ENABLE_SCHEDULER: "false",
+});
 
 const { migrate, run, closeDb } = await import("../src/server/db.ts");
 const { dedupeByTitle, extractMergeKeys, mergeKey, TitleDeduper } = await import("../src/server/enrich/dedup.ts");
