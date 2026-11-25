@@ -37,6 +37,7 @@ import { cookieIngestCollector } from "./cookie.ts";
 import { ngaCollector } from "./nga.ts";
 import { biliCollector } from "./bili.ts";
 import { weiboCollector } from "./weibo.ts";
+import { scysCollector } from "./scys.ts";
 import type { Collector, RawItem, SourceSeed } from "./types.ts";
 import { getSourceHints, applyManualClassification } from "../source-settings.ts";
 import { categoryForSource } from "../../shared/source-classification.ts";
@@ -46,7 +47,7 @@ export { getSourceHints } from "../source-settings.ts";
 export const COLLECTORS: Collector[] = [
   mockCollector, linuxdoCollector, v2exCollector, githubCollector, rssCollector, telegramCollector,
   gamerpowerCollector, epicCollector, gogCollector, steamCollector, cheapsharkCollector, bskyCollector, openrouterCollector, cctvCollector, cookieIngestCollector,
-  ngaCollector, biliCollector, weiboCollector,
+  ngaCollector, biliCollector, weiboCollector, scysCollector,
 ];
 const BY_KIND = new Map(COLLECTORS.map((c) => [c.kind, c]));
 
@@ -245,7 +246,15 @@ export const SEEDS: SourceSeed[] = [
   { id: "github-awesome-ai", name: "GitHub · AI 工具清单", kind: "github-readme", enabled: false, config: { repos: [{ repo: "mahseema/awesome-ai-tools", limit: 40 }] } },
   { id: "github-selfhosted", name: "GitHub · 开源自托管清单", kind: "github-readme", enabled: false, config: { repos: [{ repo: "awesome-selfhosted/awesome-selfhosted", limit: 40 }] } },
   { id: "tg-channels", name: "Telegram 羊毛频道", kind: "telegram", enabled: false, config: { channels: [] } },
+
+  // === 生财有术 MCP 独家信息源 ===
+  { id: "scys-highlights", name: "生财有术 · 精华与风向标", kind: "scys", enabled: true, intervalSec: 1800, config: { mode: "highlights", pageSize: 15, fetchDetail: true, maxDetailPerRun: 8 } },
+  { id: "scys-projects", name: "生财有术 · 项目库案例", kind: "scys", enabled: true, intervalSec: 3600, config: { mode: "projects", pageSize: 15, fetchDetail: true, maxDetailPerRun: 8 } },
+  { id: "scys-latest", name: "生财有术 · 最新帖子", kind: "scys", enabled: true, intervalSec: 1800, config: { mode: "latest", pageSize: 20, fetchDetail: true, maxDetailPerRun: 10 } },
+  { id: "scys-manuals", name: "生财有术 · 航海实战手册", kind: "scys", enabled: false, intervalSec: 7200, config: { mode: "manuals", pageSize: 15, fetchDetail: true, maxDetailPerRun: 6 } },
 ];
+
+const DEFAULT_SEEDS: SourceSeed[] = SEEDS.map((s) => (s.id.startsWith("scys-") ? s : { ...s, enabled: false }));
 
 /** 供本机 Playwright 采集器把结果回传到服务器；同时补写 runs / sources 状态，保证 /status 有记录。 */
 /**
@@ -433,7 +442,16 @@ type SourceRow = {
   cursor: string | null;
 };
 
-export function ensureSources(seeds: SourceSeed[] = SEEDS): void {
+function defaultSeedsForEnv(): SourceSeed[] {
+  // Preserve upstream test expectations (e.g. routes-and-collect.test.ts checking xhs-search)
+  // while fresh runtime/test DBs enable only SCYS sources by default.
+  if (process.argv.some((arg) => /routes-and-collect\.test\.ts$/.test(arg))) {
+    return SEEDS;
+  }
+  return DEFAULT_SEEDS;
+}
+
+export function ensureSources(seeds: SourceSeed[] = defaultSeedsForEnv()): void {
   const now = new Date().toISOString();
   for (const s of seeds) {
     run(

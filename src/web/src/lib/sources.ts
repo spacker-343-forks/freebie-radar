@@ -65,6 +65,7 @@ export function groupOfSource(s: Source): SourceGroupKey {
     return "news";
   }
   if (
+    id.startsWith("scys-") ||
     id.startsWith("linuxdo-") ||
     id.startsWith("v2ex-") ||
     id.includes("nodeseek") ||
