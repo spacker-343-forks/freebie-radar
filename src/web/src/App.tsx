@@ -182,12 +182,12 @@ function Toast({ message }: { message: string | null }) {
 type Preset = { key: string; label: string; icon: typeof Sparkles };
 
 const PRIMARY_CHANNELS: Preset[] = [
-  { key: "verified", label: t("真福利"), icon: Sparkles },
-  { key: "offline", label: t("实物福利"), icon: MapPin },
-  { key: "news", label: t("重要新闻"), icon: Newspaper },
-  { key: "opensource", label: t("开源项目"), icon: Code },
-  { key: "deal", label: t("黑五/好价"), icon: Flame },
   { key: "info", label: t("行业资讯"), icon: TrendingUp },
+  { key: "opensource", label: t("开源项目"), icon: Code },
+  { key: "verified", label: t("真福利"), icon: Sparkles },
+  { key: "deal", label: t("黑五/好价"), icon: Flame },
+  { key: "news", label: t("重要新闻"), icon: Newspaper },
+  { key: "offline", label: t("实物福利"), icon: MapPin },
   { key: "pan", label: t("网盘/网课"), icon: FolderOpen },
 ];
 

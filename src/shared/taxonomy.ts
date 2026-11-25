@@ -182,14 +182,14 @@ export const FREEBIE_CATEGORY_KEYS: Category[] = [
  * exclude 里的分类即使出现在 categories 里也会被该频道排除（主页查询与分类胶囊都按它算）。
  */
 export const CHANNELS: { key: string; label: string; categories: Category[]; exclude?: Category[] }[] = [
+  { key: "info", label: "行业资讯", categories: ["finance", "stock", "tech", "ai", "dev", "hardware", "security", "cloud", "software", "game", "opensource", "design", "edu", "news", "goods", "other"], exclude: ["pan", "course"] },
+  { key: "opensource", label: "开源", categories: ["ai", "dev", "opensource", "security", "cloud", "vps", "software", "tech", "design", "hardware", "edu", "other"], exclude: ["pan", "course"] },
   // 开源项目即使免费也归「开源」频道：真福利是「能领到的东西」，不是「能用的项目」。
   { key: "verified", label: "真福利", categories: FREEBIE_CATEGORY_KEYS, exclude: ["pan", "course", "offline", "lottery", "opensource"] },
   { key: "free", label: "全部白嫖", categories: FREEBIE_CATEGORY_KEYS },
   { key: "offline", label: "实物福利", categories: ["offline"] },
   { key: "news", label: "重要新闻", categories: ["finance", "tech", "stock", "news", "security", "other"], exclude: ["pan", "course"] },
-  { key: "opensource", label: "开源", categories: ["ai", "dev", "opensource", "security", "cloud", "vps", "software", "tech", "design", "hardware", "edu", "other"], exclude: ["pan", "course"] },
   { key: "deal", label: "好价", categories: ["vps", "carpool", "trade", "game", "software", "cloud", "domain", "ai", "media", "hardware", "goods", "design", "dev", "security", "edu", "other"], exclude: ["pan", "course"] },
-  { key: "info", label: "行业资讯", categories: ["finance", "stock", "tech", "ai", "dev", "hardware", "security", "cloud", "software", "game", "opensource", "design", "edu", "news", "goods", "other"], exclude: ["pan", "course"] },
   { key: "pan", label: "网盘/网课", categories: ["pan", "course"] },
 ];
 

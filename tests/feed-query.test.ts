@@ -33,7 +33,8 @@ for (const preset of ["verified", "offline", "pan", "deal", "opensource", "news"
 
 test("default channel rules are not counted as additional filters", () => {
   assert.equal(countAdditionalFilters(state()), 0);
-  assert.deepEqual(feedPolicyLabels(buildFeedQuery(state())), ["审核保留", "未过期", "近7天", "直接或有条件领取"]);
+  assert.deepEqual(feedPolicyLabels(buildFeedQuery(state())), ["隐藏审核拒绝"]);
+  assert.deepEqual(feedPolicyLabels(buildFeedQuery(state({ preset: "verified" }))), ["审核保留", "未过期", "近7天", "直接或有条件领取"]);
   assert.equal(countAdditionalFilters(state({ search: " key ", categories: ["ai", "software"], unreadOnly: true })), 3);
 });
 
@@ -54,7 +55,7 @@ test("unknown URL values cannot create blank selectors or evade channel categori
 });
 
 test("explicit selectors and time windows override defaults, not channel exclusions", () => {
-  const q = new URLSearchParams(buildFeedQuery(state({ categories: ["ai"], kindFilter: "all", obtain: "all", range: "30d", priceCap: "free" }), now));
+  const q = new URLSearchParams(buildFeedQuery(state({ preset: "verified", categories: ["ai"], kindFilter: "all", obtain: "all", range: "30d", priceCap: "free" }), now));
   assert.equal(q.get("kind"), ""); assert.equal(q.get("obtain"), "");
   assert.equal(q.get("maxAgeDays"), "30"); assert.equal(q.get("freeOnly"), "1");
   assert.equal(q.get("unexpired"), "1"); assert.ok(q.get("excludeCategory")?.includes("lottery"));
@@ -62,7 +63,7 @@ test("explicit selectors and time windows override defaults, not channel exclusi
 });
 
 test("category counts keep channel policy while removing only category, sort and limit", () => {
-  const q = new URLSearchParams(buildStatsQuery(buildFeedQuery(state({ categories: ["ai"], search: "credit", unreadOnly: true }))));
+  const q = new URLSearchParams(buildStatsQuery(buildFeedQuery(state({ preset: "verified", categories: ["ai"], search: "credit", unreadOnly: true }))));
   assert.equal(q.has("category"), false); assert.equal(q.has("sort"), false); assert.equal(q.has("limit"), false);
   assert.equal(q.get("search"), "credit"); assert.equal(q.get("unread"), "1");
   assert.equal(q.get("aiOnly"), "1"); assert.ok(q.get("excludeCategory")?.includes("pan"));
@@ -95,7 +96,7 @@ test("unlimited publication age does not relax other numeric query guards", asyn
 
 for (const [range, expected] of [["auto", ["ui-recent"]], ["30d", ["ui-recent", "ui-month"]], ["all", ["ui-recent", "ui-month", "ui-older"]]] as const) {
   test(`API time selection actually matches the UI: ${range}; expired offers stay hidden`, async () => {
-    const response = await app.request("/api/items?" + buildFeedQuery(state({ range }), now));
+    const response = await app.request("/api/items?" + buildFeedQuery(state({ preset: "verified", range }), now));
     assert.equal(response.status, 200);
     const body = await response.json() as { items: { external_id: string }[] };
     assert.deepEqual(body.items.map((item) => item.external_id).sort(), [...expected].sort());
