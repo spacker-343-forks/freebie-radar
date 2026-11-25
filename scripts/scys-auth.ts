@@ -1,10 +1,12 @@
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { migrate } from "../src/server/db.ts";
 import {
+  addScysAuthSlot,
   buildToolArgs,
   DEFAULT_SCYS_MCP_URL,
   discoverOAuthMetadata,
@@ -12,7 +14,8 @@ import {
   generateOAuthState,
   generatePkce,
   isReadOnlyScysTool,
-  loadScysAuth,
+  loadScysAuthPool,
+  MAX_SCYS_AUTH_SLOTS,
   registerDynamicClient,
   saveScysAuth,
   ScysMcpClient,
@@ -42,29 +45,35 @@ function openBrowser(url: string): void {
 }
 
 function printStatus(): void {
-  const state = loadScysAuth();
-  if (!state) {
+  const pool = loadScysAuthPool();
+  if (!pool?.slots.length) {
     console.log("状态: 未登录（settings.scys_mcp_auth 不存在）");
     console.log("请运行: pnpm scys:auth");
     return;
   }
-  const expMs = state.expiresAt ? Date.parse(state.expiresAt) : NaN;
-  const remainMin = Number.isFinite(expMs) ? Math.round((expMs - Date.now()) / 60_000) : null;
-  const expired = remainMin !== null && remainMin <= 0;
 
-  console.log("状态: 已配置 OAuth 凭据");
-  console.log(`MCP 地址: ${state.mcpUrl}`);
-  console.log(`Client ID: ${state.clientId ? `${state.clientId.slice(0, 8)}…` : "(空)"}`);
-  console.log(`Scope: ${state.scope || "mcp"}`);
-  console.log(`Refresh Token: ${state.refreshToken ? "已保存" : "缺失"}`);
-  console.log(
-    `过期时间: ${state.expiresAt ?? "未知"}${remainMin !== null ? (expired ? ` (已过期 ${Math.abs(remainMin)} 分钟)` : ` (剩余约 ${remainMin} 分钟)`) : ""}`,
-  );
-  console.log(`已缓存工具数: ${state.cachedToolSchemas?.length ?? 0}`);
-  if (state.cachedToolSchemas?.length) {
-    console.log(`工具列表: ${state.cachedToolSchemas.map((t) => t.name).join(", ")}`);
+  console.log(`状态: 已配置 OAuth 连接池（槽位数量: ${pool.slots.length} / ${MAX_SCYS_AUTH_SLOTS}）`);
+  for (let i = 0; i < pool.slots.length; i += 1) {
+    const state = pool.slots[i]!;
+    const expMs = state.expiresAt ? Date.parse(state.expiresAt) : NaN;
+    const remainMin = Number.isFinite(expMs) ? Math.round((expMs - Date.now()) / 60_000) : null;
+    const expired = remainMin !== null && remainMin <= 0;
+    const expDesc =
+      remainMin !== null
+        ? expired
+          ? `已过期 ${Math.abs(remainMin)} 分钟`
+          : `剩余约 ${remainMin} 分钟`
+        : "未知";
+    console.log(
+      `[槽位 ${i + 1}] ${state.slotId ? `slotId=${state.slotId} | ` : ""}clientId=${state.clientId ? `${state.clientId.slice(0, 8)}…` : "(空)"} | scope=${state.scope || "mcp"} | refreshToken=${state.refreshToken ? "已保存" : "缺失"} | 过期=${state.expiresAt ?? "未知"} (${expDesc})`,
+    );
   }
-  console.log(`更新时间: ${state.updatedAt}`);
+  console.log(`MCP 地址: ${pool.slots[0]!.mcpUrl}`);
+  console.log(`已缓存工具数: ${pool.cachedToolSchemas?.length ?? 0}`);
+  if (pool.cachedToolSchemas?.length) {
+    console.log(`工具列表: ${pool.cachedToolSchemas.map((t) => t.name).join(", ")}`);
+  }
+  console.log(`更新时间: ${pool.updatedAt}`);
 }
 
 async function printAndSaveTools(): Promise<void> {
@@ -175,7 +184,6 @@ async function waitForAuthCode(params: {
         fail(new Error("无法启动本地 OAuth 回调监听服务"));
         return;
       }
-      (server as unknown as { __redirectUri?: string }).__redirectUri = `http://127.0.0.1:${addr.port}/callback`;
       server.emit("listening_ready", `http://127.0.0.1:${addr.port}/callback`);
     });
 
@@ -228,12 +236,18 @@ async function waitForAuthCode(params: {
       })();
     }
 
-    // expose server via a small symbol property so caller gets redirectUri synchronously after bind
     (waitForAuthCode as unknown as { _lastServer?: typeof server })._lastServer = server;
   });
 }
 
-async function runInteractiveLogin(mcpUrl: string, headless: boolean): Promise<void> {
+async function runInteractiveLogin(mcpUrl: string, headless: boolean, addSlotMode: boolean): Promise<void> {
+  const existingPool = loadScysAuthPool();
+  if (addSlotMode && existingPool && existingPool.slots.length >= MAX_SCYS_AUTH_SLOTS) {
+    throw new Error(`连接池已达上限（${MAX_SCYS_AUTH_SLOTS} 个槽位），如需重置请直接运行 pnpm scys:auth`);
+  }
+  const nextSlotNum = addSlotMode ? (existingPool?.slots.length ?? 0) + 1 : 1;
+  const clientName = addSlotMode ? `scys-radar-${nextSlotNum}` : "scys-radar";
+
   console.log(`[scys-auth] 正在探测 OAuth 元数据: ${mcpUrl}`);
   const discovery = await discoverOAuthMetadata(mcpUrl);
   const { authServerMetadata, scope } = discovery;
@@ -245,7 +259,6 @@ async function runInteractiveLogin(mcpUrl: string, headless: boolean): Promise<v
     throw new Error("OAuth 元数据缺少 registration_endpoint，无法完成动态客户端注册");
   }
 
-  // Bind local ephemeral callback server first to obtain redirectUri
   let resolveRedirect!: (uri: string) => void;
   const redirectReady = new Promise<string>((r) => {
     resolveRedirect = r;
@@ -265,8 +278,8 @@ async function runInteractiveLogin(mcpUrl: string, headless: boolean): Promise<v
   srv.once("listening_ready", (uri: string) => resolveRedirect(uri));
 
   const redirectUri = await redirectReady;
-  console.log(`[scys-auth] 正在注册 OAuth 客户端 (redirect_uri=${redirectUri})`);
-  const client = await registerDynamicClient(authServerMetadata.registration_endpoint, redirectUri, fetch, scope);
+  console.log(`[scys-auth] 正在注册 OAuth 客户端 (redirect_uri=${redirectUri}, client_name=${clientName})`);
+  const client = await registerDynamicClient(authServerMetadata.registration_endpoint, redirectUri, fetch, scope, clientName);
 
   const authUrl = new URL(authServerMetadata.authorization_endpoint);
   authUrl.searchParams.set("response_type", "code");
@@ -303,6 +316,7 @@ async function runInteractiveLogin(mcpUrl: string, headless: boolean): Promise<v
   });
 
   const state: ScysAuthState = {
+    slotId: `slot-${nextSlotNum}-${randomBytes(4).toString("hex")}`,
     mcpUrl,
     clientId: client.clientId,
     clientSecret: client.clientSecret,
@@ -316,19 +330,31 @@ async function runInteractiveLogin(mcpUrl: string, headless: boolean): Promise<v
     scope: tokens.scope || scope,
     updatedAt: new Date().toISOString(),
   };
-  saveScysAuth(state);
-  console.log("[scys-auth] OAuth 凭据已保存到 SQLite settings.scys_mcp_auth");
+
+  if (addSlotMode) {
+    const { pool, slotIndex } = addScysAuthSlot(state);
+    console.log(`[scys-auth] 已追加到连接池第 ${slotIndex + 1} 个槽位（当前共 ${pool.slots.length}/${MAX_SCYS_AUTH_SLOTS} 个槽位）`);
+  } else {
+    saveScysAuth(state);
+    console.log("[scys-auth] OAuth 凭据已保存到 SQLite settings.scys_mcp_auth（主槽位 1/5）");
+  }
 
   const mcpClient = new ScysMcpClient({ minIntervalMs: 500 });
   const tools = await mcpClient.listTools({ forceRefresh: true });
   writeSchemasFile(tools);
   console.log(`[scys-auth] 已同步 ${tools.length} 个工具 Schema 到 ${SCHEMA_OUTPUT_PATH}`);
 
-  const smokeTool = tools.find((t) => t.name === "searchTopic")
-    ? "searchTopic"
+  const smokeTool = tools.find((t) => t.name === "contentSearch")
+    ? "contentSearch"
     : tools.find((t) => isReadOnlyScysTool(t.name))?.name;
   if (smokeTool) {
-    const args = buildToolArgs(smokeTool, tools, { mode: "highlights", pageSize: 1, page: 1, compact: true });
+    const args = buildToolArgs(smokeTool, tools, {
+      mode: "highlights",
+      pageScene: "good",
+      pageSize: 1,
+      page: 1,
+      displayMode: 2,
+    });
     await mcpClient.callTool(smokeTool, args);
     console.log(`[scys-auth] 只读冒烟测试成功 (${smokeTool}, 1 item)`);
   }
@@ -346,9 +372,10 @@ async function main(): Promise<void> {
     return;
   }
   const headless = args.includes("--headless");
+  const addSlotMode = args.includes("--add");
   const urlIdx = args.indexOf("--mcp-url");
   const mcpUrl = urlIdx >= 0 && args[urlIdx + 1] ? args[urlIdx + 1]! : DEFAULT_SCYS_MCP_URL;
-  await runInteractiveLogin(mcpUrl, headless);
+  await runInteractiveLogin(mcpUrl, headless, addSlotMode);
 }
 
 main().catch((err) => {

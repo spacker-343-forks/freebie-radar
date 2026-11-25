@@ -3,24 +3,41 @@ import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { after, before, beforeEach, test } from "node:test";
 
-process.env.DATABASE_PATH = ":memory:";
+Object.assign(process.env, {
+  DATABASE_PATH: ":memory:",
+  AI_BASE_URL: "",
+  AI_MODEL: "",
+  AI_API_KEY: "",
+  PUSH_CHANNEL: "none",
+  ENABLE_SCHEDULER: "false",
+});
 
 const { migrate, run, get, closeDb } = await import("../src/server/db.ts");
 const { ensureSources, ingestItems } = await import("../src/server/collectors/index.ts");
 const {
+  addScysAuthSlot,
   buildToolArgs,
   discoverOAuthMetadata,
   exchangeAuthorizationCode,
   generatePkce,
+  isReadOnlyScysTool,
+  loadScysAuth,
+  loadScysAuthPool,
+  MAX_SCYS_AUTH_SLOTS,
   refreshScysAccessToken,
   registerDynamicClient,
   saveScysAuth,
-  loadScysAuth,
+  SCYS_AUTH_SETTINGS_KEY,
   ScysAuthError,
   ScysMcpClient,
   ScysToolBlockedError,
 } = await import("../src/server/scys/mcp-client.ts");
-const { createScysCollector } = await import("../src/server/collectors/scys.ts");
+const {
+  createScysCollector,
+  decodeScysInlineTags,
+  formatStructuredProjectContent,
+  parseScysTimestamp,
+} = await import("../src/server/collectors/scys.ts");
 
 type MockServerState = {
   baseUrl: string;
@@ -33,10 +50,13 @@ type MockServerState = {
   sessionCounter: number;
   tokenCount: number;
   handoffPolls: number;
-  topicDetailCalls: string[];
-  lastSearchArgs: Record<string, unknown> | null;
+  topicDetailCalls: Array<{ entityType?: unknown; entityId?: unknown; token: string }>;
+  contentSearchCalls: Array<Record<string, unknown>>;
+  searchTopicCalls: Array<Record<string, unknown>>;
+  projectCasesCalls: Array<Record<string, unknown>>;
   lastSessionIdSeen: string | null;
   lastCodeChallenge: string | null;
+  validTokens: Set<string>;
 };
 
 async function readJsonBody(req: IncomingMessage): Promise<string> {
@@ -63,28 +83,50 @@ function startMockScysServer() {
     tokenCount: 0,
     handoffPolls: 0,
     topicDetailCalls: [],
-    lastSearchArgs: null,
+    contentSearchCalls: [],
+    searchTopicCalls: [],
+    projectCasesCalls: [],
     lastSessionIdSeen: null,
     lastCodeChallenge: null,
+    validTokens: new Set(["access-token-1"]),
   };
 
-  let currentAccessToken = "access-token-1";
-  let currentRefreshToken = "refresh-token-1";
+  let validRefreshTokens = new Set(["refresh-token-1", "refresh-token-slot-2"]);
 
   const toolSchemas = [
+    {
+      name: "contentSearch",
+      description: "Partition search",
+      inputSchema: {
+        type: "object",
+        properties: {
+          keyword: { type: "string" },
+          pageIndex: { type: "integer" },
+          pageSize: { type: "integer" },
+          pageScene: { type: "string", enum: ["all", "good", "winBid", "topic", "fxb", "square"] },
+          displayMode: { type: "integer" },
+          orderBy: { type: "string", enum: ["gmt_create", "gmt_digested", "gmt_win_bid"] },
+        },
+        additionalProperties: false,
+      },
+    },
     {
       name: "searchTopic",
       description: "Search topics",
       inputSchema: {
         type: "object",
         properties: {
-          q: { type: "string" },
-          limit: { type: "number" },
-          pageNo: { type: "number" },
-          essenceOnly: { type: "boolean" },
-          sort: { type: "string", enum: ["hot", "highlight", "latest"] },
-          compact: { type: "boolean" },
+          keyword: { type: "string" },
+          pageIndex: { type: "integer" },
+          pageSize: { type: "integer" },
+          isHot: { type: "boolean" },
+          isDigested: { type: "boolean" },
+          displayMode: { type: "integer" },
+          gmtCreateStart: { type: "integer" },
+          gmtCreateEnd: { type: "integer" },
+          orderBy: { type: "string", enum: ["gmt_create", "gmt_digested", "gmt_win_bid"] },
         },
+        additionalProperties: false,
       },
     },
     {
@@ -93,9 +135,25 @@ function startMockScysServer() {
       inputSchema: {
         type: "object",
         properties: {
-          topicId: { type: "string" },
+          entityType: { type: "string" },
+          entityId: { type: "string" },
         },
-        required: ["topicId"],
+        required: ["entityType", "entityId"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "searchProjectCases",
+      description: "Search project cases",
+      inputSchema: {
+        type: "object",
+        properties: {
+          keyword: { type: "string" },
+          sortType: { type: "string" },
+          pageIndex: { type: "integer" },
+          pageSize: { type: "integer" },
+        },
+        additionalProperties: false,
       },
     },
     {
@@ -104,9 +162,12 @@ function startMockScysServer() {
       inputSchema: {
         type: "object",
         properties: {
-          query: { type: "string" },
-          pageSize: { type: "number" },
+          keyword: { type: "string" },
+          pageIndex: { type: "integer" },
+          pageSize: { type: "integer" },
         },
+        required: ["keyword"],
+        additionalProperties: false,
       },
     },
     {
@@ -115,19 +176,46 @@ function startMockScysServer() {
       inputSchema: {
         type: "object",
         properties: { projectId: { type: "string" } },
+        required: ["projectId"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "activityList",
+      description: "List activities",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pageIndex: { type: "integer" },
+          pageSize: { type: "integer" },
+        },
+        additionalProperties: false,
       },
     },
     {
       name: "activityManualToc",
       description: "Get manual TOC",
-      inputSchema: { type: "object", properties: {} },
+      inputSchema: {
+        type: "object",
+        properties: {
+          activityId: { type: "string" },
+          courseId: { type: "string" },
+        },
+        additionalProperties: false,
+      },
     },
     {
       name: "activityManualDetail",
       description: "Get manual detail",
       inputSchema: {
         type: "object",
-        properties: { manualId: { type: "string" } },
+        properties: {
+          activityId: { type: "string" },
+          courseId: { type: "string" },
+          itemId: { type: "string" },
+        },
+        required: ["itemId"],
+        additionalProperties: false,
       },
     },
     {
@@ -202,11 +290,13 @@ function startMockScysServer() {
           return;
         }
         state.tokenCount += 1;
-        currentAccessToken = `access-token-${state.tokenCount}`;
-        currentRefreshToken = `refresh-token-${state.tokenCount}`;
+        const tok = `access-token-${state.tokenCount}`;
+        const refTok = `refresh-token-${state.tokenCount}`;
+        state.validTokens.add(tok);
+        validRefreshTokens.add(refTok);
         sendJson(res, 200, {
-          access_token: currentAccessToken,
-          refresh_token: currentRefreshToken,
+          access_token: tok,
+          refresh_token: refTok,
           expires_in: 3600,
           token_type: "Bearer",
           scope: "mcp",
@@ -214,16 +304,20 @@ function startMockScysServer() {
         return;
       }
       if (grantType === "refresh_token") {
-        if (state.rejectRefresh || form.get("refresh_token") !== currentRefreshToken) {
+        const offered = form.get("refresh_token") || "";
+        if (state.rejectRefresh || !validRefreshTokens.has(offered)) {
           sendJson(res, 400, { error: "invalid_grant", error_description: "refresh token expired" });
           return;
         }
+        validRefreshTokens.delete(offered);
         state.tokenCount += 1;
-        currentAccessToken = `access-token-${state.tokenCount}`;
-        currentRefreshToken = `refresh-token-${state.tokenCount}`;
+        const tok = `access-token-${state.tokenCount}`;
+        const refTok = `refresh-token-${state.tokenCount}`;
+        state.validTokens.add(tok);
+        validRefreshTokens.add(refTok);
         sendJson(res, 200, {
-          access_token: currentAccessToken,
-          refresh_token: currentRefreshToken,
+          access_token: tok,
+          refresh_token: refTok,
           expires_in: 3600,
           token_type: "Bearer",
         });
@@ -234,7 +328,9 @@ function startMockScysServer() {
     }
 
     if (req.method === "POST" && u.pathname === "/shengcai-web/mcp") {
-      if (req.headers.authorization !== `Bearer ${currentAccessToken}`) {
+      const authHeader = req.headers.authorization || "";
+      const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+      if (!state.validTokens.has(token)) {
         sendJson(res, 401, { error: "invalid_token" });
         return;
       }
@@ -277,72 +373,162 @@ function startMockScysServer() {
       } else if (rpc.method === "tools/call") {
         const name = String(rpc.params?.name ?? "");
         const args = (rpc.params?.arguments ?? {}) as Record<string, unknown>;
-        if (name === "searchTopic") {
-          state.lastSearchArgs = args;
+
+        if (name === "contentSearch") {
+          state.contentSearchCalls.push(args);
+          const scene = String(args.pageScene ?? "good");
+          if (scene === "fxb") {
+            result = {
+              structuredContent: {
+                topicDetailDTO: {
+                  items: [
+                    {
+                      detailUrl: "https://scys.com/articleDetail/xq_topic/1002",
+                      topicDTO: {
+                        entityType: "xq_topic",
+                        entityId: "1002",
+                        gmtCreate: 1795529820,
+                        articleContent:
+                          '<e type="text_bold" title="%E4%BB%8A%E5%A4%A9%E5%AE%9E%E6%B5%8B%E4%BA%86%E4%B8%80%E4%B8%AA%E5%86%B7%E9%97%A8%E4%BF%A1%E6%81%AF%E5%B7%AE%E9%A1%B9%E7%9B%AE" />%E5%86%85%E5%AE%B9',
+                        menuList: [{ key: 1, value: "风向标" }],
+                      },
+                      topicUserDTO: { name: "小满" },
+                    },
+                  ],
+                },
+              },
+            };
+          } else {
+            result = {
+              structuredContent: {
+                topicDetailDTO: {
+                  items: [
+                    {
+                      detailUrl: "https://scys.com/articleDetail/xq_topic/1001",
+                      topicDTO: {
+                        entityType: "xq_topic",
+                        entityId: "1001",
+                        showTitle: "AI Agent 自动化副业月入过万拆解",
+                        gmtCreate: 1795520000,
+                        articleContent: "完整拆解工作流与变现路径",
+                        menuList: [{ key: 2428701, value: "官方活动" }, { key: 2, value: "精华" }],
+                        miniImageList: ["https://scys.com/img/cover-1001.png"],
+                      },
+                      topicUserDTO: { name: "阿哲" },
+                    },
+                  ],
+                },
+              },
+            };
+          }
+        } else if (name === "searchTopic") {
+          state.searchTopicCalls.push(args);
           result = {
             structuredContent: {
-              list: [
+              items: [
                 {
-                  topicId: "t-1001",
-                  title: "AI Agent 自动化副业月入过万拆解",
-                  summary: "完整拆解工作流与变现路径",
-                  author: "阿哲",
-                  publishTime: "2026-11-24T10:00:00Z",
-                  tags: ["AI", "风向标"],
-                },
-                {
-                  topicId: "t-1002",
-                  content: "今天实测了一个冷门信息差项目，不需要引流，直接对接本地商家就能跑通。附上完整报价单。",
-                  author: "小满",
-                  publishTime: "2026-11-25T02:00:00Z",
+                  topicDTO: {
+                    entityType: "forum_topic",
+                    entityId: "1003",
+                    highlightShowTitle: "最新开源自动化工具实测",
+                    gmtCreate: 1795531000,
+                    articleContent: "无需手动操作，一键部署运行。",
+                    menuList: [{ key: 3, value: "AI实战" }],
+                  },
+                  topicUserDTO: { name: "阿南" },
                 },
               ],
             },
           };
         } else if (name === "topicDetail") {
-          const tid = String(args.topicId ?? "");
-          state.topicDetailCalls.push(tid);
+          assert.equal("topicId" in args, false, "topicDetail 不允许传 topicId (additionalProperties: false)");
+          assert.ok(args.entityType && args.entityId, "topicDetail 必须传 entityType 和 entityId");
+          state.topicDetailCalls.push({ entityType: args.entityType, entityId: args.entityId, token });
+          const eid = String(args.entityId);
           result = {
             content: [
               {
                 type: "text",
                 text: JSON.stringify({
-                  topicId: tid,
-                  content: `正文详情(${tid})：` + "实战步骤干货".repeat(30),
-                  feishuContent: "飞书文档补充SOP与工具清单",
-                  comments: [{ author: "亦仁", content: "这个切入点很扎实，值得复制" }],
+                  topicDTO: {
+                    entityType: args.entityType,
+                    entityId: eid,
+                    articleContent:
+                      `正文详情(${eid})：` +
+                      '<e type="text_bold" title="%E3%80%8C%E6%A0%B8%E5%BF%83%E6%96%B9%E6%B3%95%E3%80%8D" /> ' +
+                      '<e type="web" href="https%3A%2F%2Fscys.com%2Fdoc%2F1" title="%E5%AE%9E%E6%88%98SOP" /> ' +
+                      '<e type="hashtag" title="%23AI%E5%89%AF%E4%B8%9A%23" />',
+                  },
+                  documentList: [{ title: "飞书补充表", content: "飞书文档补充SOP与工具清单" }],
+                  topicCommentDTOList: [
+                    { commentUserDTO: { name: "亦仁" }, content: '<e type="mention" title="%40%E9%98%BF%E5%93%B2" /> 这个切入点很扎实' },
+                  ],
                 }),
               },
             ],
           };
-        } else if (name === "projectLibSearch") {
+        } else if (name === "searchProjectCases") {
+          state.projectCasesCalls.push(args);
           result = {
             structuredContent: {
-              projects: [{ projectId: "p-201", title: "小红书虚拟资料矩阵项目", summary: "低成本自动化出单" }],
+              items: [
+                {
+                  projectId: 201,
+                  name: "小红书虚拟资料矩阵项目",
+                  summary: "低成本自动化出单",
+                  incomeMin: 3000,
+                  incomeMax: 15000,
+                  dailyMinutes: 60,
+                  estimatedCost: 200,
+                  publishedAt: 1795529820,
+                  platformMenus: [{ name: "小红书" }],
+                  monetizeMenus: [{ name: "虚拟产品" }],
+                  crowdMenus: [{ name: "新手友好" }],
+                },
+              ],
             },
           };
         } else if (name === "projectLibDetail") {
+          assert.ok(typeof args.projectId === "string");
           result = {
             structuredContent: {
               projectId: args.projectId,
-              content: "项目库详细步骤与成本收益测算",
+              description: "项目概述：适合个人低成本冷启动。",
+              content: [
+                {
+                  key: "worth_reason",
+                  value: [{ key: "核心壁垒", value: "选品库沉淀与自动化回复流程" }],
+                },
+                {
+                  key: "profit_model",
+                  value: "单份资料定价 19.9~39.9 元，配合自动发货实现纯利润变现。",
+                },
+              ],
+            },
+          };
+        } else if (name === "activityList") {
+          result = {
+            structuredContent: {
+              items: [{ id: "88", name: "2026年11月 AI 实战航海" }],
             },
           };
         } else if (name === "activityManualToc") {
+          assert.ok(args.activityId || args.courseId, "activityManualToc 必须传 activityId 或 courseId");
           result = {
             structuredContent: {
-              toc: [
+              items: [
                 {
                   title: "AI 工具实战航海",
-                  children: [{ manualId: "m-301", title: "第一天：选品与定位" }],
+                  children: [{ itemId: "301", title: "第一天：选品与定位", hasContent: true }],
                 },
               ],
             },
           };
         } else if (name === "activityManualDetail") {
+          assert.ok(args.itemId, "activityManualDetail 必须传 itemId");
           result = {
             structuredContent: {
-              manualId: args.manualId,
+              itemId: args.itemId,
               content: "航海实战手册第一天正文详情",
             },
           };
@@ -380,8 +566,8 @@ function startMockScysServer() {
       }),
     stop: () => new Promise<void>((resolve) => server.close(() => resolve())),
     resetTokens: () => {
-      currentAccessToken = "access-token-1";
-      currentRefreshToken = "refresh-token-1";
+      state.validTokens = new Set(["access-token-1", "access-token-slot-2"]);
+      validRefreshTokens = new Set(["refresh-token-1", "refresh-token-slot-2"]);
       state.tokenCount = 1;
     },
   };
@@ -411,7 +597,9 @@ beforeEach(() => {
   mock.state.sessionCounter = 1;
   mock.state.handoffPolls = 0;
   mock.state.topicDetailCalls = [];
-  mock.state.lastSearchArgs = null;
+  mock.state.contentSearchCalls = [];
+  mock.state.searchTopicCalls = [];
+  mock.state.projectCasesCalls = [];
   mock.state.lastSessionIdSeen = null;
   mock.state.lastCodeChallenge = null;
   mock.resetTokens();
@@ -450,7 +638,6 @@ test("OAuth 2.1 发现（含路径型 issuer）、DCR、PKCE 与 authorization_h
   assert.equal(pkce.codeChallengeMethod, "S256");
   mock.state.lastCodeChallenge = pkce.codeChallenge;
 
-  // 模拟 handoff 轮询 2 次拿到 callback_uri
   const poll1 = await fetch(discovery.authServerMetadata.authorization_handoff_endpoint!, { method: "POST" });
   assert.equal(poll1.status, 202);
   const poll2 = await fetch(discovery.authServerMetadata.authorization_handoff_endpoint!, { method: "POST" });
@@ -470,6 +657,105 @@ test("OAuth 2.1 发现（含路径型 issuer）、DCR、PKCE 与 authorization_h
   assert.ok(tokens.refreshToken);
 });
 
+test("向后兼容旧版单对象 scys_mcp_auth，并支持 addScysAuthSlot 追加多槽位（上限 5）", () => {
+  const legacySingle = {
+    mcpUrl: `${mock.state.baseUrl}/shengcai-web/mcp`,
+    clientId: "legacy-client",
+    accessToken: "access-token-1",
+    refreshToken: "refresh-token-1",
+    expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+    tokenEndpoint: `${mock.state.baseUrl}/mcp-oauth/token`,
+    cachedToolSchemas: [{ name: "contentSearch" }],
+    updatedAt: new Date().toISOString(),
+  };
+  run(
+    `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))`,
+    SCYS_AUTH_SETTINGS_KEY,
+    JSON.stringify(legacySingle),
+  );
+
+  const pool1 = loadScysAuthPool()!;
+  assert.equal(pool1.slots.length, 1);
+  assert.equal(pool1.slots[0]!.clientId, "legacy-client");
+  assert.equal(pool1.cachedToolSchemas?.length, 1);
+  assert.equal(loadScysAuth()?.clientId, "legacy-client");
+
+  for (let i = 2; i <= MAX_SCYS_AUTH_SLOTS; i += 1) {
+    const { pool, slotIndex } = addScysAuthSlot({
+      mcpUrl: `${mock.state.baseUrl}/shengcai-web/mcp`,
+      clientId: `client-${i}`,
+      accessToken: `access-token-${i}`,
+      refreshToken: `refresh-token-${i}`,
+      tokenEndpoint: `${mock.state.baseUrl}/mcp-oauth/token`,
+      updatedAt: new Date().toISOString(),
+    });
+    assert.equal(slotIndex, i - 1);
+    assert.equal(pool.slots.length, i);
+  }
+
+  assert.throws(
+    () =>
+      addScysAuthSlot({
+        mcpUrl: `${mock.state.baseUrl}/shengcai-web/mcp`,
+        clientId: "client-6",
+        accessToken: "access-token-6",
+        tokenEndpoint: `${mock.state.baseUrl}/mcp-oauth/token`,
+        updatedAt: new Date().toISOString(),
+      }),
+    ScysAuthError,
+  );
+});
+
+test("相同 clientId 但不同 accessToken/refreshToken 的多槽位追加与独立刷新互不覆盖", async () => {
+  saveScysAuth({
+    slotId: "slot-a",
+    mcpUrl: `${mock.state.baseUrl}/shengcai-web/mcp`,
+    clientId: "shared-dcr-client",
+    accessToken: "access-token-1",
+    refreshToken: "refresh-token-1",
+    expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+    tokenEndpoint: `${mock.state.baseUrl}/mcp-oauth/token`,
+    updatedAt: new Date().toISOString(),
+  });
+  addScysAuthSlot({
+    slotId: "slot-b",
+    mcpUrl: `${mock.state.baseUrl}/shengcai-web/mcp`,
+    clientId: "shared-dcr-client",
+    accessToken: "access-token-slot-2",
+    refreshToken: "refresh-token-slot-2",
+    expiresAt: new Date(Date.now() + 30_000).toISOString(),
+    tokenEndpoint: `${mock.state.baseUrl}/mcp-oauth/token`,
+    updatedAt: new Date().toISOString(),
+  });
+  addScysAuthSlot({
+    slotId: "slot-c",
+    mcpUrl: `${mock.state.baseUrl}/shengcai-web/mcp`,
+    clientId: "shared-dcr-client",
+    accessToken: "access-token-slot-3",
+    refreshToken: "refresh-token-slot-3",
+    expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+    tokenEndpoint: `${mock.state.baseUrl}/mcp-oauth/token`,
+    updatedAt: new Date().toISOString(),
+  });
+
+  const beforePool = loadScysAuthPool()!;
+  assert.equal(beforePool.slots.length, 3, "同 clientId 的独立会话必须追加而不被覆盖");
+
+  // 单独刷新第 2 个槽位，不得误覆盖槽位 1 或槽位 3
+  const refreshedSlot2 = await refreshScysAccessToken(beforePool.slots[1]!, fetch, true);
+  assert.equal(refreshedSlot2.accessToken, "access-token-2");
+  assert.equal(refreshedSlot2.refreshToken, "refresh-token-2");
+
+  const afterPool = loadScysAuthPool()!;
+  assert.equal(afterPool.slots.length, 3);
+  assert.equal(afterPool.slots[0]!.accessToken, "access-token-1");
+  assert.equal(afterPool.slots[0]!.refreshToken, "refresh-token-1");
+  assert.equal(afterPool.slots[1]!.accessToken, "access-token-2");
+  assert.equal(afterPool.slots[1]!.refreshToken, "refresh-token-2");
+  assert.equal(afterPool.slots[2]!.accessToken, "access-token-slot-3");
+  assert.equal(afterPool.slots[2]!.refreshToken, "refresh-token-slot-3");
+});
+
 test("Token 临近过期自动 refresh 并持久化轮换后的 refresh_token；400/401 刷新失败报中文错误", async () => {
   saveScysAuth({
     mcpUrl: `${mock.state.baseUrl}/shengcai-web/mcp`,
@@ -477,20 +763,19 @@ test("Token 临近过期自动 refresh 并持久化轮换后的 refresh_token；
     clientSecret: "mock-secret-456",
     accessToken: "access-token-1",
     refreshToken: "refresh-token-1",
-    expiresAt: new Date(Date.now() + 30_000).toISOString(), // < 2min -> auto refresh
+    expiresAt: new Date(Date.now() + 30_000).toISOString(),
     tokenEndpoint: `${mock.state.baseUrl}/mcp-oauth/token`,
     updatedAt: new Date().toISOString(),
   });
 
   const client = new ScysMcpClient({ minIntervalMs: 0 });
   const tools = await client.listTools();
-  assert.ok(tools.length >= 6);
+  assert.ok(tools.length >= 8);
 
   const saved = loadScysAuth()!;
   assert.equal(saved.accessToken, "access-token-2");
   assert.equal(saved.refreshToken, "refresh-token-2");
 
-  // 刷新被服务端拒绝 (400 invalid_grant)
   mock.state.rejectRefresh = true;
   await assert.rejects(
     () => refreshScysAccessToken(saved),
@@ -498,7 +783,7 @@ test("Token 临近过期自动 refresh 并持久化轮换后的 refresh_token；
   );
 });
 
-test("MCP Streamable HTTP 支持 SSE 帧解析、Session ID、429 Retry-After 退避与只读工具护栏", async () => {
+test("MCP Streamable HTTP 支持 SSE 帧解析、Session ID、429 Retry-After 退避与扩充后只读工具护栏", async () => {
   saveScysAuth({
     mcpUrl: `${mock.state.baseUrl}/shengcai-web/mcp`,
     clientId: "mock-client-123",
@@ -509,27 +794,73 @@ test("MCP Streamable HTTP 支持 SSE 帧解析、Session ID、429 Retry-After �
     updatedAt: new Date().toISOString(),
   });
 
+  for (const allowed of [
+    "getDocumentDetail",
+    "pageTopicComment",
+    "activityList",
+    "activitySearch",
+    "searchTrustedContent",
+    "getDailyReport",
+    "ai__listAiFeedItems",
+  ]) {
+    assert.equal(isReadOnlyScysTool(allowed), true);
+  }
+
   mock.state.sseMode = true;
   mock.state.rateLimitOnce = true;
 
   const client = new ScysMcpClient({ minIntervalMs: 5 });
   const tools = await client.listTools();
-  assert.ok(tools.some((t) => t.name === "searchTopic"));
+  assert.ok(tools.some((t) => t.name === "contentSearch"));
 
-  // 只读护栏：禁止调用写工具 addFavorite 与未知工具
-  await assert.rejects(() => client.callTool("addFavorite", { topicId: "t-1001" }), ScysToolBlockedError);
-  await assert.rejects(() => client.callTool("anchorTopic", { topicId: "t-1001" }), ScysToolBlockedError);
+  await assert.rejects(() => client.callTool("addFavorite", { topicId: "1001" }), ScysToolBlockedError);
+  await assert.rejects(() => client.callTool("topicLike", { topicId: "1001" }), ScysToolBlockedError);
+  await assert.rejects(() => client.callTool("addCoinToTopic", { topicId: "1001" }), ScysToolBlockedError);
 
-  const res = await client.callTool<{ list: unknown[] }>("searchTopic", { q: "AI" });
-  assert.equal(res.list.length, 2);
+  const res = await client.callTool<{ topicDetailDTO: { items: unknown[] } }>("contentSearch", {
+    pageScene: "good",
+    pageIndex: 1,
+    pageSize: 5,
+    displayMode: 2,
+  });
+  assert.equal(res.topicDetailDTO.items.length, 1);
   assert.equal(mock.state.lastSessionIdSeen, "mock-session-1");
 });
 
-test("动态 Schema 参数映射与 scysCollector 二段去重、无标题推导、飞书/评论拼接", async () => {
+test("解码知识星球 <e .../> 内联标签、秒级时间戳与结构化 projectLibDetail.content", () => {
+  const decoded = decodeScysInlineTags(
+    '<e type="text_bold" title="%E3%80%8C%E6%A0%B8%E5%BF%83%E3%80%8D" /> ' +
+      '<e type="web" href="https%3A%2F%2Fscys.com%2Fa" title="%E9%93%BE%E6%8E%A5" /> ' +
+      '<e type="hashtag" title="%23AI%23" /> <e type="mention" title="%40%E4%BA%A6%E4%BB%81" />',
+  );
+  assert.equal(decoded, "**「核心」** [链接](https://scys.com/a) #AI# @亦仁");
+
+  assert.equal(parseScysTimestamp(1795529820), new Date(1795529820 * 1000).toISOString());
+  assert.equal(parseScysTimestamp("1795529820"), new Date(1795529820 * 1000).toISOString());
+
+  const md = formatStructuredProjectContent([
+    { key: "worth_reason", value: [{ key: "小标题", value: "段落正文" }] },
+    { key: "profit_model", value: "单价 29.9 元" },
+  ]);
+  assert.ok(md.includes("## 值得关注的原因"));
+  assert.ok(md.includes("### 小标题\n段落正文"));
+  assert.ok(md.includes("## 盈利模式\n单价 29.9 元"));
+});
+
+test("真实结构采集：highlights (good+fxb)、latest、projects (searchProjectCases) 与 manuals (activityList->Toc->Detail)", async () => {
   saveScysAuth({
     mcpUrl: `${mock.state.baseUrl}/shengcai-web/mcp`,
-    clientId: "mock-client-123",
+    clientId: "slot-1",
     accessToken: "access-token-1",
+    refreshToken: "refresh-token-1",
+    expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+    tokenEndpoint: `${mock.state.baseUrl}/mcp-oauth/token`,
+    updatedAt: new Date().toISOString(),
+  });
+  addScysAuthSlot({
+    mcpUrl: `${mock.state.baseUrl}/shengcai-web/mcp`,
+    clientId: "slot-2",
+    accessToken: "access-token-slot-2",
     refreshToken: "refresh-token-1",
     expiresAt: new Date(Date.now() + 3600_000).toISOString(),
     tokenEndpoint: `${mock.state.baseUrl}/mcp-oauth/token`,
@@ -538,8 +869,7 @@ test("动态 Schema 参数映射与 scysCollector 二段去重、无标题推导
 
   const collector = createScysCollector(() => new ScysMcpClient({ minIntervalMs: 0 }));
 
-  // 第一次采集：2 条均抓取 detail
-  const first = await collector.collect({
+  const highlights = await collector.collect({
     sourceId: "scys-highlights",
     config: { mode: "highlights", pageSize: 10, fetchDetail: true, maxDetailPerRun: 8 },
     cursor: null,
@@ -547,42 +877,44 @@ test("动态 Schema 参数映射与 scysCollector 二段去重、无标题推导
     http: {} as never,
     log: () => {},
   });
-  assert.equal(first.items.length, 2);
-  assert.deepEqual(mock.state.topicDetailCalls, ["t-1001", "t-1002"]);
-  // 验证动态 Schema 适配：mock schema 用了 q / limit / pageNo / essenceOnly / sort / compact
-  assert.equal(mock.state.lastSearchArgs?.limit, 10);
-  assert.equal(mock.state.lastSearchArgs?.essenceOnly, true);
-  assert.equal(mock.state.lastSearchArgs?.sort, "highlight");
-  assert.equal(mock.state.lastSearchArgs?.compact, true);
-
-  // 验证无显式标题的 t-1002 自动从首句推导出标题，且合并了飞书文档和评论
-  const item2 = first.items.find((i) => i.externalId === "scys-topic-t-1002")!;
-  assert.ok(item2.title.includes("今天实测了一个冷门信息差项目"));
-  assert.ok(item2.content?.includes("飞书文档补充SOP与工具清单"));
-  assert.ok(item2.content?.includes("亦仁: 这个切入点很扎实"));
-  assert.equal(item2.kindHint, "info");
-
-  // 把 t-1001 写入数据库模拟已入库完整详情
-  run(
-    `INSERT INTO items (source_id, external_id, url, url_key, title, content, first_seen_at, last_seen_at)
-     VALUES ('scys-highlights', 'scys-topic-t-1001', 'https://scys.com/topic/t-1001', 'scys.com/topic/t-1001', 'existing', '已有完整正文', datetime('now'), datetime('now'))`,
+  assert.equal(highlights.items.length, 2);
+  assert.deepEqual(
+    mock.state.contentSearchCalls.map((c) => c.pageScene).sort(),
+    ["fxb", "good"],
   );
+  // 验证多槽位并发轮询分发到不同槽位 token
+  assert.equal(new Set(mock.state.topicDetailCalls.map((c) => c.token)).size, 2);
+  assert.ok(mock.state.topicDetailCalls.every((c) => c.entityType === "xq_topic"));
 
-  // 第二次采集：t-1001 已存在完整详情，Stage 2 仅抓取 t-1002，且 t-1001 输出 content=null 不覆盖库内详情！
-  mock.state.topicDetailCalls = [];
-  const second = await collector.collect({
-    sourceId: "scys-highlights",
-    config: { mode: "highlights", pageSize: 10, fetchDetail: true, maxDetailPerRun: 8 },
+  const item1 = highlights.items.find((i) => i.externalId === "scys-topic-xq_topic-1001")!;
+  assert.equal(item1.url, "https://scys.com/articleDetail/xq_topic/1001");
+  assert.equal(item1.author, "阿哲");
+  assert.equal(item1.publishedAt, new Date(1795520000 * 1000).toISOString());
+  assert.deepEqual(item1.tags, ["官方活动", "精华"]);
+  assert.equal(item1.imageUrl, "https://scys.com/img/cover-1001.png");
+  assert.ok(item1.content?.includes("**「核心方法」**"));
+  assert.ok(item1.content?.includes("[实战SOP](https://scys.com/doc/1)"));
+  assert.ok(item1.content?.includes("飞书文档补充SOP与工具清单"));
+  assert.ok(item1.content?.includes("亦仁: @阿哲 这个切入点很扎实"));
+
+  const item2 = highlights.items.find((i) => i.externalId === "scys-topic-xq_topic-1002")!;
+  assert.ok(item2.title.includes("今天实测了一个冷门信息差项目"));
+
+  // latest 模式：验证 searchTopic 传时间窗与 pageSize<=10，且解包 forum_topic
+  const latest = await collector.collect({
+    sourceId: "scys-latest",
+    config: { mode: "latest", pageSize: 20, fetchDetail: false },
     cursor: null,
     maxItems: 20,
     http: {} as never,
     log: () => {},
   });
-  assert.equal(second.items.length, 2);
-  assert.deepEqual(mock.state.topicDetailCalls, ["t-1002"]);
-  assert.equal(second.items.find((i) => i.externalId === "scys-topic-t-1001")?.content, null);
+  assert.ok(mock.state.searchTopicCalls.length >= 1);
+  assert.equal(mock.state.searchTopicCalls[0]?.pageSize, 10);
+  assert.ok(typeof mock.state.searchTopicCalls[0]?.gmtCreateStart === "number");
+  assert.ok(latest.items.some((i) => i.url === "https://scys.com/articleDetail/forum_topic/1003"));
 
-  // projects 与 manuals 模式
+  // projects 模式：searchProjectCases + projectLibDetail
   const projects = await collector.collect({
     sourceId: "scys-projects",
     config: { mode: "projects", pageSize: 5 },
@@ -591,9 +923,15 @@ test("动态 Schema 参数映射与 scysCollector 二段去重、无标题推导
     http: {} as never,
     log: () => {},
   });
-  assert.equal(projects.items[0]?.externalId, "scys-project-p-201");
-  assert.ok(projects.items[0]?.content?.includes("项目库详细步骤"));
+  assert.equal(projects.items[0]?.externalId, "scys-project-201");
+  assert.equal(projects.items[0]?.url, "https://scys.com/opportunity/detail/201");
+  assert.equal(projects.items[0]?.publishedAt, new Date(1795529820 * 1000).toISOString());
+  assert.ok(projects.items[0]?.content?.includes("启动成本: 200元"));
+  assert.ok(projects.items[0]?.content?.includes("日均投入: 60分钟"));
+  assert.ok(projects.items[0]?.content?.includes("月入区间: 3000~15000"));
+  assert.ok(projects.items[0]?.content?.includes("## 值得关注的原因"));
 
+  // manuals 模式：activityList -> activityManualToc -> activityManualDetail
   const manuals = await collector.collect({
     sourceId: "scys-manuals",
     config: { mode: "manuals", pageSize: 5 },
@@ -602,26 +940,37 @@ test("动态 Schema 参数映射与 scysCollector 二段去重、无标题推导
     http: {} as never,
     log: () => {},
   });
-  assert.equal(manuals.items[0]?.externalId, "scys-manual-m-301");
+  assert.equal(manuals.items[0]?.externalId, "scys-manual-301");
   assert.ok(manuals.items[0]?.content?.includes("航海实战手册第一天正文详情"));
 });
 
-test("buildToolArgs 限制 contentSearch 的 pageSize <= 5 并支持 toolArgs 覆盖", () => {
-  const args = buildToolArgs(
-    "contentSearch",
-    [{ name: "contentSearch", inputSchema: { type: "object", properties: { query: { type: "string" }, pageSize: { type: "number" } } } }],
-    { keyword: "AI 变现", pageSize: 20 },
-    { pageSize: 3 },
+test("buildToolArgs 适配 searchTopic 上限 <= 10、topicDetail {entityType,entityId} 及 overrides 覆盖", () => {
+  const stArgs = buildToolArgs(
+    "searchTopic",
+    [{ name: "searchTopic", inputSchema: { type: "object", properties: { keyword: { type: "string" }, pageSize: { type: "integer" } } } }],
+    { keyword: "AI 变现", pageSize: 25 },
+    { pageSize: 6 },
   );
-  assert.equal(args.query, "AI 变现");
-  assert.equal(args.pageSize, 3);
+  assert.equal(stArgs.keyword, "AI 变现");
+  assert.equal(stArgs.pageSize, 6);
 
-  const clamped = buildToolArgs(
-    "contentSearch",
-    [{ name: "contentSearch", inputSchema: { type: "object", properties: { query: { type: "string" }, pageSize: { type: "number" } } } }],
-    { keyword: "AI", pageSize: 20 },
+  const stClamped = buildToolArgs(
+    "searchTopic",
+    [{ name: "searchTopic", inputSchema: { type: "object", properties: { keyword: { type: "string" }, pageSize: { type: "integer" } } } }],
+    { keyword: "AI", pageSize: 25 },
   );
-  assert.equal(clamped.pageSize, 5);
+  assert.equal(stClamped.pageSize, 10);
+
+  const tdArgs = buildToolArgs(
+    "topicDetail",
+    [{ name: "topicDetail", inputSchema: { type: "object", properties: { entityType: { type: "string" }, entityId: { type: "string" } } } }],
+    { entityType: "forum_topic", entityId: "9988" },
+  );
+  assert.deepEqual(tdArgs, { entityType: "forum_topic", entityId: "9988" });
+
+  // 空 schema 降级分支仍必须补全必填字段 entityType 与 entityId
+  const tdFallback = buildToolArgs("topicDetail", [], { entityType: "xq_topic", entityId: "7766" });
+  assert.deepEqual(tdFallback, { entityType: "xq_topic", entityId: "7766" });
 });
 
 test("Mcp-Session-Id 会话失效 (HTTP 404) 时自动清空并重新 initialize 后重试一次且防死循环", async () => {
@@ -639,17 +988,20 @@ test("Mcp-Session-Id 会话失效 (HTTP 404) 时自动清空并重新 initialize
   await client.listTools();
   assert.equal(mock.state.initializeCount, 1);
 
-  // 服务端会话过期返回 404：应自动清空 sessionId、重新 initialize 并完成此次调用
   mock.state.expireSessionOnce = true;
-  const res = await client.callTool<{ list: unknown[] }>("searchTopic", { q: "AI" });
-  assert.equal(res.list.length, 2);
+  const res = await client.callTool<{ topicDetailDTO: { items: unknown[] } }>("contentSearch", {
+    pageScene: "good",
+    pageIndex: 1,
+    pageSize: 5,
+    displayMode: 2,
+  });
+  assert.equal(res.topicDetailDTO.items.length, 1);
   assert.equal(mock.state.initializeCount, 2);
   assert.equal(mock.state.lastSessionIdSeen, "mock-session-2");
 
-  // 若服务端重连后仍持续 404，仅重试一次后抛出异常，不会死循环
   mock.state.alwaysExpireSession = true;
   await assert.rejects(
-    () => client.callTool("searchTopic", { q: "AI" }),
+    () => client.callTool("contentSearch", { pageScene: "good" }),
     (err: unknown) => err instanceof Error && err.message.includes("HTTP 404"),
   );
   assert.equal(mock.state.initializeCount, 3);
@@ -669,7 +1021,6 @@ test("真实落库回归：二次采集不覆盖已有 items.content，且超限
 
   const collector = createScysCollector(() => new ScysMcpClient({ minIntervalMs: 0 }));
 
-  // 首轮 maxDetailPerRun=1：只抓 t-1001 详情，t-1002 因超限留待下轮补抓（输出 content=null）
   const run1 = await collector.collect({
     sourceId: "scys-highlights",
     config: { mode: "highlights", pageSize: 10, fetchDetail: true, maxDetailPerRun: 1 },
@@ -678,24 +1029,25 @@ test("真实落库回归：二次采集不覆盖已有 items.content，且超限
     http: {} as never,
     log: () => {},
   });
-  assert.deepEqual(mock.state.topicDetailCalls, ["t-1001"]);
-  assert.ok(run1.items.find((i) => i.externalId === "scys-topic-t-1001")?.content?.includes("飞书文档补充SOP与工具清单"));
-  assert.equal(run1.items.find((i) => i.externalId === "scys-topic-t-1002")?.content, null);
+  assert.deepEqual(
+    mock.state.topicDetailCalls.map((c) => c.entityId),
+    ["1001"],
+  );
+  assert.ok(run1.items.find((i) => i.externalId === "scys-topic-xq_topic-1001")?.content?.includes("飞书文档补充SOP与工具清单"));
+  assert.equal(run1.items.find((i) => i.externalId === "scys-topic-xq_topic-1002")?.content, null);
 
   const persist1 = ingestItems("scys-highlights", run1.items);
   assert.equal(persist1.inserted, 2);
 
   const row1AfterRun1 = get<{ content: string | null }>(
-    "SELECT content FROM items WHERE source_id = 'scys-highlights' AND external_id = 'scys-topic-t-1001'",
+    "SELECT content FROM items WHERE source_id = 'scys-highlights' AND external_id = 'scys-topic-xq_topic-1001'",
   )!;
   const row2AfterRun1 = get<{ content: string | null }>(
-    "SELECT content FROM items WHERE source_id = 'scys-highlights' AND external_id = 'scys-topic-t-1002'",
+    "SELECT content FROM items WHERE source_id = 'scys-highlights' AND external_id = 'scys-topic-xq_topic-1002'",
   )!;
-  assert.ok(row1AfterRun1.content?.includes("正文详情(t-1001)"));
+  assert.ok(row1AfterRun1.content?.includes("正文详情(1001)"));
   assert.equal(row2AfterRun1.content, null);
 
-  // 次轮 maxDetailPerRun=1：t-1001 已有完整 content 跳过 Stage 2（output content=null 不覆盖库内详情）；
-  // t-1002 库内 content 为 NULL，自动补抓 Stage 2 详情并落库！
   mock.state.topicDetailCalls = [];
   const run2 = await collector.collect({
     sourceId: "scys-highlights",
@@ -705,19 +1057,22 @@ test("真实落库回归：二次采集不覆盖已有 items.content，且超限
     http: {} as never,
     log: () => {},
   });
-  assert.deepEqual(mock.state.topicDetailCalls, ["t-1002"]);
-  assert.equal(run2.items.find((i) => i.externalId === "scys-topic-t-1001")?.content, null);
-  assert.ok(run2.items.find((i) => i.externalId === "scys-topic-t-1002")?.content?.includes("正文详情(t-1002)"));
+  assert.deepEqual(
+    mock.state.topicDetailCalls.map((c) => c.entityId),
+    ["1002"],
+  );
+  assert.equal(run2.items.find((i) => i.externalId === "scys-topic-xq_topic-1001")?.content, null);
+  assert.ok(run2.items.find((i) => i.externalId === "scys-topic-xq_topic-1002")?.content?.includes("正文详情(1002)"));
 
   const persist2 = ingestItems("scys-highlights", run2.items);
   assert.equal(persist2.skipped, 2);
 
   const row1AfterRun2 = get<{ content: string | null }>(
-    "SELECT content FROM items WHERE source_id = 'scys-highlights' AND external_id = 'scys-topic-t-1001'",
+    "SELECT content FROM items WHERE source_id = 'scys-highlights' AND external_id = 'scys-topic-xq_topic-1001'",
   )!;
   const row2AfterRun2 = get<{ content: string | null }>(
-    "SELECT content FROM items WHERE source_id = 'scys-highlights' AND external_id = 'scys-topic-t-1002'",
+    "SELECT content FROM items WHERE source_id = 'scys-highlights' AND external_id = 'scys-topic-xq_topic-1002'",
   )!;
   assert.equal(row1AfterRun2.content, row1AfterRun1.content, "二次采集不得覆盖已有完整 content");
-  assert.ok(row2AfterRun2.content?.includes("正文详情(t-1002)"), "超限未抓详情条目应在下轮自动补抓并落库");
+  assert.ok(row2AfterRun2.content?.includes("正文详情(1002)"), "超限未抓详情条目应在下轮自动补抓并落库");
 });

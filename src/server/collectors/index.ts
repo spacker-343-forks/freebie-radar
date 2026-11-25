@@ -248,10 +248,10 @@ export const SEEDS: SourceSeed[] = [
   { id: "tg-channels", name: "Telegram 羊毛频道", kind: "telegram", enabled: false, config: { channels: [] } },
 
   // === 生财有术 MCP 独家信息源 ===
-  { id: "scys-highlights", name: "生财有术 · 精华与风向标", kind: "scys", enabled: true, intervalSec: 1800, config: { mode: "highlights", pageSize: 15, fetchDetail: true, maxDetailPerRun: 8 } },
-  { id: "scys-projects", name: "生财有术 · 项目库案例", kind: "scys", enabled: true, intervalSec: 3600, config: { mode: "projects", pageSize: 15, fetchDetail: true, maxDetailPerRun: 8 } },
-  { id: "scys-latest", name: "生财有术 · 最新帖子", kind: "scys", enabled: true, intervalSec: 1800, config: { mode: "latest", pageSize: 20, fetchDetail: true, maxDetailPerRun: 10 } },
-  { id: "scys-manuals", name: "生财有术 · 航海实战手册", kind: "scys", enabled: false, intervalSec: 7200, config: { mode: "manuals", pageSize: 15, fetchDetail: true, maxDetailPerRun: 6 } },
+  { id: "scys-highlights", name: "生财有术 · 精华与风向标", kind: "scys", enabled: true, intervalSec: 1800, config: { mode: "highlights", pageSize: 15, fetchDetail: true, maxDetailPerRun: 15 } },
+  { id: "scys-projects", name: "生财有术 · 项目库案例", kind: "scys", enabled: true, intervalSec: 3600, config: { mode: "projects", pageSize: 15, fetchDetail: true, maxDetailPerRun: 15 } },
+  { id: "scys-latest", name: "生财有术 · 最新帖子", kind: "scys", enabled: true, intervalSec: 1800, config: { mode: "latest", pageSize: 15, fetchDetail: true, maxDetailPerRun: 15 } },
+  { id: "scys-manuals", name: "生财有术 · 航海实战手册", kind: "scys", enabled: false, intervalSec: 7200, config: { mode: "manuals", pageSize: 12, fetchDetail: true, maxDetailPerRun: 12 } },
 ];
 
 const DEFAULT_SEEDS: SourceSeed[] = SEEDS.map((s) => (s.id.startsWith("scys-") ? s : { ...s, enabled: false }));
