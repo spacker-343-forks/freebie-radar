@@ -22,7 +22,10 @@
     "obtain": "tsx src/server/cli.ts obtain",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
-    "docs:preview": "vitepress preview docs"
+    "docs:preview": "vitepress preview docs",
+    "scys:auth": "tsx scripts/scys-auth.ts",
+    "scys:preset": "tsx scripts/scys-preset.ts",
+    "scys:tools": "tsx scripts/scys-auth.ts --tools"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.4",
