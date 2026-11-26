@@ -40,6 +40,7 @@ import {
 } from "./user-push.ts";
 import { buildRssXml, rssEtag, type RssItem } from "./rss.ts";
 import { checkForUpdate, getBuildInfo, getUpdateJob, hostUpdateCommand, runUpdate } from "./updater.ts";
+import { checkUpstreamUpdates, dismissUpstreamWatch, getUpstreamWatchState } from "./upstream-watch.ts";
 import { isPublicSite, siteMode } from "./config.ts";
 import {
   addCustomRssSource,
@@ -659,6 +660,7 @@ const PUBLIC_GET_EXACT = new Set([
   "/api/source-quality",
   "/api/site/bootstrap",
   "/api/rss",
+  "/api/upstream-watch",
 ]);
 
 const PUBLIC_GET_PREFIX = ["/api/items/", "/api/digests/"];
@@ -2101,6 +2103,28 @@ const fetchLimit = Math.min(Math.max(offset + limit * 3, 240), 600);
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
     }
+  });
+
+  app.get("/api/upstream-watch", (c) => {
+    const id = identityOf(c);
+    if (id.siteMode === "public" && !id.isAdmin) {
+      return c.json({ activeBanner: false });
+    }
+    return c.json(getUpstreamWatchState());
+  });
+
+  app.post("/api/upstream-watch/check", async (c) => {
+    try {
+      return c.json(await checkUpstreamUpdates({ force: true }));
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  });
+
+  app.post("/api/upstream-watch/dismiss", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as { sha?: unknown } | null;
+    const sha = typeof body?.sha === "string" ? body.sha : undefined;
+    return c.json(dismissUpstreamWatch(sha));
   });
 
   /* ================================================================== *

@@ -20,6 +20,7 @@ import { releaseFlareSession } from "./flaresolverr.ts";
 import { pushUserDaily, startUserPushScheduler } from "./user-push.ts";
 import { purgeExpiredSessions } from "./auth.ts";
 import { getBuildInfo } from "./updater.ts";
+import { checkUpstreamUpdates, startUpstreamWatchScheduler } from "./upstream-watch.ts";
 import { registerSecurity } from "./security.ts";
 import { reconcileFixedSourceCategories } from "./source-settings.ts";
 
@@ -106,17 +107,24 @@ if (config.enableScheduler) {
   startPromptSync();
   // 个人 Bot 攒批：各用户按自己的周期出队，与全局攒批互不干扰
   startUserPushScheduler();
+  // 上游源码重大更新 AI 每日巡检
+  startUpstreamWatchScheduler();
   // 日报：仍然按 DAILY_CRON 触发
   startScheduler({
     collect: async () => undefined,
     daily: async () => {
       const now = new Date();
       const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-      if (digestExists(day)) return;
-      await runDaily({ date: now });
-      // 每日精选落库后，给开了「个人日报」的用户各发一份
-      await pushUserDaily().catch((err) => {
-        console.error("[user-push] 个人日报失败:", err instanceof Error ? err.message : err);
+      if (!digestExists(day)) {
+        await runDaily({ date: now });
+        // 每日精选落库后，给开了「个人日报」的用户各发一份
+        await pushUserDaily().catch((err) => {
+          console.error("[user-push] 个人日报失败:", err instanceof Error ? err.message : err);
+        });
+      }
+      // 顺带触发一次非强制上游重大更新巡检
+      void checkUpstreamUpdates({ force: false }).catch((err) => {
+        console.error("[upstream-watch] 日报联动巡检失败:", err instanceof Error ? err.message : err);
       });
     },
   });
