@@ -64,6 +64,7 @@ import {
 import { AuthModal } from "./components/AuthModal.tsx";
 import { WelcomeModal } from "./components/WelcomeModal.tsx";
 import { RssModal } from "./components/RssModal.tsx";
+import { UpstreamWatchBanner } from "./components/UpstreamWatchBanner.tsx";
 import type { DigestReport } from "../../shared/digest.ts";
 import { KIND_LABEL, KIND_ORDER, OBTAIN_HINT, OBTAIN_LABEL, SOURCE_GROUPS, categoriesForPreset, categoryLabelForPreset, channelExcluded, formatInterval, groupOfSource } from "./lib/sources.ts";
 
@@ -1134,6 +1135,8 @@ export function App() {
             </button>
           </div>
         </header>
+
+        <UpstreamWatchBanner adminReady={adminReady} onNotify={notify} />
 
         {/* 主内容区 */}
         <main className={tab === "feed" ? "workspace-content min-w-0 flex-1" : "workspace-content min-w-0 flex-1 px-3.5 py-3.5 sm:px-6 sm:py-5"}>

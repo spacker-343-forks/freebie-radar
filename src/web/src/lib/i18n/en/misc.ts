@@ -129,6 +129,13 @@ export const EN_MISC: Record<string, string> = {
   "飞书文档内容": "Feishu doc",
   "关联文档": "Related docs",
   "精选评论": "Featured comments",
+  "上游重大更新": "Upstream major update",
+  "领先 {n} 个提交": "{n} commits ahead",
+  "查看详情": "Details",
+  "已知晓（本版不再提醒）": "Got it (hide for this release)",
+  "已复制合入命令": "Merge command copied",
+  "复制合入命令": "Copy merge command",
+  "查看 GitHub 变更对比": "Compare on GitHub",
   "欢迎来到资源雷达": "Welcome to Resource Radar",
   "资源雷达把社区、游戏平台、软件限免站、GitHub、Reddit、Bluesky、Telegram 与自定义 RSS 的信息聚合到一起，\n先过规则初筛与统一屏蔽词，再由 AI 语义定级分流，最后按你的规则推送到 Telegram。\n\n· 不登录也能浏览全部公开内容，「不想看 / 收藏 / 已读」只存在你自己的浏览器里，不会影响别人。\n· 用 LINUX DO 登录后可跨设备同步个人偏好，还能绑定自己的 Telegram Bot，按个人规则收推送。\n· 每条资源都带原始链接，兑换码与截止时间请自行核对，本站只做聚合与筛选，不对第三方活动的有效性负责。": "Resource Radar pulls together feeds from communities, game platforms, software giveaway sites, GitHub, Reddit, Bluesky, Telegram and custom RSS.\nA rule pre-filter and one unified blocklist run first, then AI grades and routes every item, and finally your own rules push it to Telegram.\n\n· All public content is browsable without logging in; “hide / star / read” lives only in your own browser and never affects anyone else.\n· Signing in with LINUX DO syncs preferences across devices and lets you bind your own Telegram bot with personal push rules.\n· Every item keeps its original link — verify codes and expiry dates yourself; this site only aggregates and filters and is not responsible for third-party offers.",
 };

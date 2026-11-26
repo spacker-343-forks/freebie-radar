@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { t } from "../lib/i18n.ts";
-import { Activity, Check, Copy, Database, ExternalLink, Gauge, KeyRound, Loader2, Pencil, Play, Plus, Rss, Search, ShieldCheck, Trash2, X } from "lucide-react";
+import { Activity, Check, Copy, Database, ExternalLink, Gauge, GitMerge, KeyRound, Loader2, Pencil, Play, Plus, RefreshCw, Rss, Search, ShieldCheck, Trash2, X } from "lucide-react";
 import {
   CATEGORY_LABEL,
   KIND_LABEL,
@@ -10,8 +10,10 @@ import {
   timeAgo,
 } from "../lib/sources.ts";
 import type { RetentionSettings, Run, Source, SourceQuality } from "../types.ts";
+import type { UpstreamWatchState } from "../../../shared/upstream-watch.ts";
 import { DEFAULT_FIXED_CATEGORIES } from "../../../shared/source-classification.ts";
 import { ClassificationPanel } from "./ClassificationPanel.tsx";
+import { UPSTREAM_WATCH_UPDATED_EVENT } from "./UpstreamWatchBanner.tsx";
 
 const INTERVAL_OPTIONS = [
   { label: t("60 秒"), sec: 60 },
@@ -722,6 +724,9 @@ export function OpsPanel({
   const [retCounts, setRetCounts] = useState<{ total: number; active: number; ignored: number; starred: number } | null>(null);
   const [cleaning, setCleaning] = useState(false);
   const [cleanPreview, setCleanPreview] = useState<Record<string, number> | null>(null);
+  const [upstreamWatch, setUpstreamWatch] = useState<UpstreamWatchState | null>(null);
+  const [upstreamChecking, setUpstreamChecking] = useState(false);
+  const [upstreamCopied, setUpstreamCopied] = useState(false);
 
 
   // 来源质量榜：按源的 AI 留存率看谁在浪费采集与 AI 额度
@@ -745,6 +750,38 @@ export function OpsPanel({
       })
       .catch(() => undefined);
   }, []);
+  useEffect(() => {
+    const loadUpstream = () => {
+      fetch("/api/upstream-watch")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j: Partial<UpstreamWatchState> | null) => {
+          if (j && typeof j.repo === "string") setUpstreamWatch(j as UpstreamWatchState);
+        })
+        .catch(() => undefined);
+    };
+    loadUpstream();
+    window.addEventListener(UPSTREAM_WATCH_UPDATED_EVENT, loadUpstream);
+    return () => window.removeEventListener(UPSTREAM_WATCH_UPDATED_EVENT, loadUpstream);
+  }, []);
+
+  const checkUpstreamNow = async () => {
+    setUpstreamChecking(true);
+    try {
+      const r = await fetch("/api/upstream-watch/check", { method: "POST" });
+      if (!r.ok) {
+        onNotify?.(t("上游检测失败"));
+        return;
+      }
+      const next = (await r.json()) as UpstreamWatchState;
+      setUpstreamWatch(next);
+      window.dispatchEvent(new Event(UPSTREAM_WATCH_UPDATED_EVENT));
+      onNotify?.(t("已完成上游源头 AI 巡检"));
+    } catch {
+      onNotify?.(t("上游检测失败"));
+    } finally {
+      setUpstreamChecking(false);
+    }
+  };
 
   const saveRetentionField = async (patch: Partial<RetentionSettings>) => {
     if (!retention) return;
@@ -839,6 +876,112 @@ export function OpsPanel({
           </a>
         </div>
       )}
+
+      {/* 上游白嫖雷达源头 AI 巡检卡 */}
+      <div className="panel min-w-0 space-y-2 px-4 py-3">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2 text-[12.5px]">
+            <GitMerge size={14} className="shrink-0 text-accent" />
+            <span className="font-semibold text-ink-950">{t("上游白嫖雷达源头巡检")}</span>
+            <span className="rounded bg-ink-100 px-1.5 py-0.5 font-mono text-[11px] text-ink-600">
+              {upstreamWatch?.repo ?? "ZiChuanLan/freebie-radar"}
+            </span>
+            {upstreamWatch?.latestTag && (
+              <span className="rounded border border-ink-200 bg-surface-hover px-1.5 py-0.5 font-mono text-[11px] text-ink-700">
+                {upstreamWatch.latestTag}
+              </span>
+            )}
+            <span className="font-mono text-[11px] text-ink-500">
+              {upstreamWatch && upstreamWatch.aheadCount > 0
+                ? t("未合入 {n} 个提交", { n: upstreamWatch.aheadCount })
+                : t("已同步最新")}
+            </span>
+            {upstreamWatch && (
+              <span
+                className={
+                  "rounded border px-1.5 py-0.5 text-[11px] font-medium " +
+                  (upstreamWatch.importance === "major"
+                    ? "border-brand-border bg-brand-subtle text-accent"
+                    : upstreamWatch.importance === "minor"
+                      ? "border-code-border bg-code-subtle text-code"
+                      : "border-deal-border bg-deal-subtle text-deal")
+                }
+              >
+                {upstreamWatch.importance === "major"
+                  ? t("发现重大功能可合入")
+                  : upstreamWatch.importance === "minor"
+                    ? t("仅常规小修")
+                    : t("已同步最新")}
+              </span>
+            )}
+          </div>
+
+          <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              disabled={upstreamChecking}
+              onClick={() => void checkUpstreamNow()}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-solid px-2.5 py-1.5 text-[12px] font-medium text-on-solid transition-colors hover:bg-solid-hover disabled:opacity-50"
+            >
+              {upstreamChecking ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+              {upstreamChecking ? t("检测中…") : t("立即 AI 检测上游")}
+            </button>
+            {upstreamWatch?.mergeCommand && (
+              <button
+                type="button"
+                onClick={() => {
+                  void navigator.clipboard?.writeText(upstreamWatch.mergeCommand).catch(() => undefined);
+                  setUpstreamCopied(true);
+                  onNotify?.(t("已复制合入命令"));
+                  window.setTimeout(() => setUpstreamCopied(false), 1800);
+                }}
+                className="inline-flex items-center gap-1 rounded-lg border border-ink-200 bg-surface px-2.5 py-1.5 text-[12px] font-medium text-ink-700 hover:bg-ink-100"
+              >
+                {upstreamCopied ? <Check size={12} className="text-deal" /> : <Copy size={12} />}
+                {upstreamCopied ? t("已复制") : t("复制合入命令")}
+              </button>
+            )}
+            {upstreamWatch?.compareUrl && /^https?:\/\//i.test(upstreamWatch.compareUrl) && (
+              <a
+                href={upstreamWatch.compareUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 rounded-lg border border-ink-200 bg-surface px-2.5 py-1.5 text-[12px] font-medium text-ink-700 hover:bg-ink-100"
+              >
+                {t("变更对比")} <ExternalLink size={11} />
+              </a>
+            )}
+          </div>
+        </div>
+
+        {upstreamWatch && (
+          <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-2 text-[12px] text-ink-600">
+            <span className="min-w-0 flex-1 [overflow-wrap:anywhere] break-words">{upstreamWatch.headline}</span>
+            <span className="shrink-0 text-[11px] text-ink-400">
+              {t("上次检测：{when}", {
+                when: upstreamWatch.checkedAt ? timeAgo(upstreamWatch.checkedAt) : t("从未检测"),
+              })}
+            </span>
+          </div>
+        )}
+
+        {upstreamWatch && upstreamWatch.highlights.length > 0 && (
+          <ul className="space-y-0.5 text-[12px] text-ink-700">
+            {upstreamWatch.highlights.map((hl, idx) => (
+              <li key={idx} className="flex min-w-0 items-start gap-1.5">
+                <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-ink-400" aria-hidden="true" />
+                <span className="min-w-0 flex-1 [overflow-wrap:anywhere] break-words">{hl}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {upstreamWatch?.error && (
+          <div className="rounded-md border border-alert-border bg-alert-subtle px-2.5 py-1.5 text-[11.5px] text-alert [overflow-wrap:anywhere]">
+            {upstreamWatch.error}
+          </div>
+        )}
+      </div>
 
       {subTab === "sources" && (
         <div className="space-y-4">
