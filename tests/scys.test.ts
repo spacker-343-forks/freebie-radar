@@ -944,6 +944,52 @@ test("真实结构采集：highlights (good+fxb)、latest、projects (searchProj
   assert.ok(manuals.items[0]?.content?.includes("航海实战手册第一天正文详情"));
 });
 
+test("scysCollector 支持从 ctx.config.pageIndex / page 透传历史回溯页码", async () => {
+  saveScysAuth({
+    mcpUrl: `${mock.state.baseUrl}/shengcai-web/mcp`,
+    clientId: "slot-1",
+    accessToken: "access-token-1",
+    refreshToken: "refresh-token-1",
+    expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+    tokenEndpoint: `${mock.state.baseUrl}/mcp-oauth/token`,
+    updatedAt: new Date().toISOString(),
+  });
+
+  const collector = createScysCollector(() => new ScysMcpClient({ minIntervalMs: 0 }));
+
+  await collector.collect({
+    sourceId: "scys-highlights",
+    config: { mode: "highlights", pageScene: "good", pageIndex: 4, pageSize: 25, fetchDetail: false },
+    cursor: null,
+    maxItems: 25,
+    http: {} as never,
+    log: () => {},
+  });
+  assert.equal(mock.state.contentSearchCalls.at(-1)?.pageIndex, 4);
+  assert.equal(mock.state.contentSearchCalls.at(-1)?.pageSize, 25);
+
+  await collector.collect({
+    sourceId: "scys-projects",
+    config: { mode: "projects", page: 3, pageSize: 15, fetchDetail: false },
+    cursor: null,
+    maxItems: 15,
+    http: {} as never,
+    log: () => {},
+  });
+  assert.equal(mock.state.projectCasesCalls.at(-1)?.pageIndex, 3);
+
+  await collector.collect({
+    sourceId: "scys-latest",
+    config: { mode: "latest", pageIndex: 2, pageSize: 20, fetchDetail: false },
+    cursor: null,
+    maxItems: 20,
+    http: {} as never,
+    log: () => {},
+  });
+  assert.equal(mock.state.contentSearchCalls.at(-1)?.pageIndex, 2);
+  assert.equal(mock.state.searchTopicCalls.at(-1)?.pageIndex, 2);
+});
+
 test("buildToolArgs 适配 searchTopic 上限 <= 10、topicDetail {entityType,entityId} 及 overrides 覆盖", () => {
   const stArgs = buildToolArgs(
     "searchTopic",

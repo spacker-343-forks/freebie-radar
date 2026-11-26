@@ -638,6 +638,7 @@ export function createScysCollector(clientFactory?: (cfg: Record<string, unknown
         modeRaw === "projects" || modeRaw === "latest" || modeRaw === "manuals" ? modeRaw : "highlights";
       const keyword = typeof cfg.keyword === "string" && cfg.keyword.trim() ? cfg.keyword.trim() : undefined;
       const tag = typeof cfg.tag === "string" && cfg.tag.trim() ? cfg.tag.trim() : undefined;
+      const pageIndex = Math.max(1, Math.round(Number(cfg.pageIndex ?? cfg.page ?? 1) || 1));
       const pageSize = Math.min(Math.max(1, Number(cfg.pageSize ?? 15) || 15), ctx.maxItems || 50);
       const fetchDetail = cfg.fetchDetail !== false;
       const maxDetailPerRun = fetchDetail ? Math.max(0, Number(cfg.maxDetailPerRun ?? 8)) : 0;
@@ -678,12 +679,12 @@ export function createScysCollector(clientFactory?: (cfg: Record<string, unknown
         if (!hasAnySchema || hasTool("contentSearch")) {
           const scenes = explicitScene ? [explicitScene] : ["good", "fxb"];
           stage1Label = `contentSearch(${scenes.join("+")})`;
-          ctx.log(`Stage 1 调用 ${stage1Label} (pageSize=${pageSize})`);
+          ctx.log(`Stage 1 调用 ${stage1Label} (pageIndex=${pageIndex}, pageSize=${pageSize})`);
           const calls = scenes.map((scene) => {
             const args = buildToolArgs(
               "contentSearch",
               schemas,
-              { mode, keyword, tag, pageSize, page: 1, pageScene: scene, displayMode: 2 },
+              { mode, keyword, tag, pageSize, page: pageIndex, pageScene: scene, displayMode: 2 },
               stage1Override ?? undefined,
             );
             return () => client.callTool<unknown>("contentSearch", args);
@@ -701,24 +702,27 @@ export function createScysCollector(clientFactory?: (cfg: Record<string, unknown
           const args = buildToolArgs(
             "searchTopic",
             schemas,
-            { mode, keyword, tag, pageSize: Math.min(pageSize, 10), page: 1, displayMode: 2, compact: true },
+            { mode, keyword, tag, pageSize: Math.min(pageSize, 10), page: pageIndex, displayMode: 2, compact: true },
             stage1Override ?? undefined,
           );
-          ctx.log(`Stage 1 调用 searchTopic(mode=${mode}, pageSize=${pageSize})`);
+          ctx.log(`Stage 1 调用 searchTopic(mode=${mode}, pageIndex=${pageIndex}, pageSize=${pageSize})`);
           records = extractRecordsFromPayload(await client.callTool<unknown>("searchTopic", args));
         }
       } else if (mode === "latest") {
         const nowSec = Math.floor(Date.now() / 1000);
-        const weekAgoSec = nowSec - 7 * 86400;
+        const lookbackDays = pageIndex > 1 ? Math.max(7, pageIndex * 14) : 7;
+        const gmtCreateStartSec = nowSec - lookbackDays * 86400;
+        const latestScene =
+          typeof cfg.pageScene === "string" && cfg.pageScene.trim() ? cfg.pageScene.trim() : "topic";
         const tasks: Array<() => Promise<unknown>> = [];
         const usedTools: string[] = [];
 
         if (!hasAnySchema || hasTool("contentSearch")) {
-          usedTools.push("contentSearch(topic)");
+          usedTools.push(`contentSearch(${latestScene})`);
           const csArgs = buildToolArgs(
             "contentSearch",
             schemas,
-            { mode, keyword, tag, pageSize, page: 1, pageScene: "topic", displayMode: 2 },
+            { mode, keyword, tag, pageSize, page: pageIndex, pageScene: latestScene, displayMode: 2 },
             stage1Override ?? undefined,
           );
           tasks.push(() => client.callTool<unknown>("contentSearch", csArgs));
@@ -733,10 +737,10 @@ export function createScysCollector(clientFactory?: (cfg: Record<string, unknown
               keyword,
               tag,
               pageSize: Math.min(pageSize, 10),
-              page: 1,
+              page: pageIndex,
               displayMode: 2,
               orderBy: "gmt_create",
-              ...(keyword ? {} : { gmtCreateStart: weekAgoSec }),
+              ...(keyword ? {} : { gmtCreateStart: gmtCreateStartSec }),
               compact: true,
             },
             stage1Override ?? undefined,
@@ -745,7 +749,7 @@ export function createScysCollector(clientFactory?: (cfg: Record<string, unknown
         }
 
         stage1Label = usedTools.join("+");
-        ctx.log(`Stage 1 调用 ${stage1Label} (pageSize=${pageSize})`);
+        ctx.log(`Stage 1 调用 ${stage1Label} (pageIndex=${pageIndex}, pageSize=${pageSize})`);
         const results = slotCount > 1 ? await Promise.all(tasks.map((fn) => fn())) : await (async () => {
           const out: unknown[] = [];
           for (const fn of tasks) out.push(await fn());
@@ -760,20 +764,20 @@ export function createScysCollector(clientFactory?: (cfg: Record<string, unknown
           const args = buildToolArgs(
             "searchProjectCases",
             schemas,
-            { mode, keyword, pageSize, page: 1, sortType: "latest" },
+            { mode, keyword, pageSize, page: pageIndex, sortType: "latest" },
             stage1Override ?? undefined,
           );
-          ctx.log(`Stage 1 调用 searchProjectCases(pageSize=${pageSize})`);
+          ctx.log(`Stage 1 调用 searchProjectCases(pageIndex=${pageIndex}, pageSize=${pageSize})`);
           records = extractRecordsFromPayload(await client.callTool<unknown>("searchProjectCases", args));
         } else {
           stage1Label = "projectLibSearch";
           const args = buildToolArgs(
             "projectLibSearch",
             schemas,
-            { mode, keyword: keyword || "AI", pageSize, page: 1 },
+            { mode, keyword: keyword || "AI", pageSize, page: pageIndex },
             stage1Override ?? undefined,
           );
-          ctx.log(`Stage 1 调用 projectLibSearch(pageSize=${pageSize})`);
+          ctx.log(`Stage 1 调用 projectLibSearch(pageIndex=${pageIndex}, pageSize=${pageSize})`);
           records = extractRecordsFromPayload(await client.callTool<unknown>("projectLibSearch", args));
         }
       } else {
@@ -786,10 +790,10 @@ export function createScysCollector(clientFactory?: (cfg: Record<string, unknown
           const args = buildToolArgs(
             "activityManualSearch",
             schemas,
-            { mode, keyword, pageSize, page: 1 },
+            { mode, keyword, pageSize, page: pageIndex },
             stage1Override ?? undefined,
           );
-          ctx.log(`Stage 1 调用 activityManualSearch(keyword=${keyword})`);
+          ctx.log(`Stage 1 调用 activityManualSearch(keyword=${keyword}, pageIndex=${pageIndex})`);
           records = extractRecordsFromPayload(await client.callTool<unknown>("activityManualSearch", args));
         } else if (cfgActivityId || cfgCourseId) {
           stage1Label = "activityManualToc";

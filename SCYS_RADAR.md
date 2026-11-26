@@ -74,9 +74,10 @@ pnpm start
 
 ## 3. 常用命令速查
 
-- `pnpm scys:auth`：生财有术 MCP 登录鉴权
+- `pnpm scys:auth`：生财有术 MCP 登录鉴权（可用 `pnpm scys:auth --add` 追加多槽位连接池，最多 5 个并发槽位加速抓取；`pnpm scys:auth --status` 查看槽位状态）
 - `pnpm scys:tools`：查看 `scys-mcp` 可用工具
 - `pnpm scys:preset`：重置/同步生财源开关、AI 脱水提示词与全局屏蔽规则
+- `pnpm scys:backfill`：按页回溯历史精华/风向标/项目库/中标/最新帖并流式脱水入库（支持 `--pages 6 --page-size 25 --sections good,fxb,projects,winBid,topic --model gpt-6.1-terra:xhigh --reset`，断点保存在 `settings.scys_backfill_progress`）
 - `pnpm collect`：立即执行一次启用的数据源采集
 - `pnpm test`：运行全部测试
 - `git pull --rebase origin main`：同步上游 `freebie-radar` 更新
