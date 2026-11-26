@@ -232,19 +232,22 @@ test("普通未知模型遇 HTTP 400 temperature 不支持错误时自动去掉 
   assert.equal("temperature" in sentBodies[1]!, false);
 });
 
-test("生财长文脱水默认参数与 2000 字正文截断策略 (aiSummaryExcerpt)", async (t) => {
+test("生财长文脱水默认参数、HTML清洗与 6000 字正文截断策略 (aiSummaryExcerpt)", async (t) => {
   assert.equal(DEFAULT_AI_SETTINGS.baseUrl, "https://api.openai.com/v1");
   assert.equal(DEFAULT_AI_SETTINGS.model, "gpt-6.1-terra:high");
   assert.equal(DEFAULT_AI_SETTINGS.batchSize, 4);
   assert.equal(DEFAULT_AI_SETTINGS.concurrency, 3);
   assert.equal(DEFAULT_AI_SETTINGS.timeoutSec, 75);
 
-  const exact2000 = "A".repeat(2000);
-  assert.equal(aiSummaryExcerpt({ content: exact2000 }), exact2000);
+  const htmlWrapped = `<div class="tiptap-wrapper"><p>第一步：配置&nbsp;<strong>MCP &amp; API</strong></p><br class="ProseMirror-trailingBreak"><p>第二步：运行&lt;脚本&gt;</p></div>`;
+  assert.equal(aiSummaryExcerpt({ content: htmlWrapped }), "第一步：配置 MCP & API 第二步：运行<脚本>");
 
-  const head = "HEAD_SOP_".padEnd(1550, "B");
-  const middle = "MID_".padEnd(500, "M");
-  const tail = "_TAIL_CTA".padStart(420, "C");
+  const exact6000 = "A".repeat(6000);
+  assert.equal(aiSummaryExcerpt({ content: exact6000 }), exact6000);
+
+  const head = "HEAD_SOP_".padEnd(4800, "B");
+  const middle = "MID_".padEnd(600, "M");
+  const tail = "_TAIL_CTA".padStart(1150, "C");
   const longContent = `${head}${middle}${tail}`;
   const excerpt = aiSummaryExcerpt({ content: longContent });
   assert.equal(excerpt, `${head} … ${tail}`);
@@ -259,7 +262,7 @@ test("生财长文脱水默认参数与 2000 字正文截断策略 (aiSummaryExc
     });
   });
 
-  await reviewItems([{ ...items[0]!, content: longContent }], settings);
+  await reviewItems([{ ...items[0]!, content: `<p>${longContent}</p>` }], settings);
   assert.equal(sentPayloads.length, 1);
   assert.equal(sentPayloads[0]![0]!.summary, `${head} … ${tail}`);
 });

@@ -4,6 +4,7 @@ import { scysCollector, type ScysMode } from "../src/server/collectors/scys.ts";
 import { get, migrate, run } from "../src/server/db.ts";
 import { aiReady, getAiSettings, parseModelSpec, saveAiSettings } from "../src/server/enrich/ai-settings.ts";
 import { createHttp } from "../src/server/http.ts";
+import { getRetention, saveRetention } from "../src/server/retention.ts";
 
 const PROGRESS_KEY = "scys_backfill_progress";
 
@@ -96,6 +97,12 @@ function clearProgress(): void {
 async function main(): Promise<void> {
   migrate();
   ensureSources();
+
+  const curRetention = getRetention();
+  if (curRetention.keptDays <= 180) {
+    saveRetention({ itemDays: 3650, keptDays: 3650, auto: false });
+    console.log("[backfill] 已将内容保留期从默认 180 天升级为 10 年长期归档（itemDays=3650, keptDays=3650, auto=false）");
+  }
 
   const opts = parseBackfillOptions(process.argv.slice(2));
   if (opts.reset) {

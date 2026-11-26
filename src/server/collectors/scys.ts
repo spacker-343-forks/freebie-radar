@@ -10,6 +10,7 @@ import {
 import type { CollectContext, Collector, RawItem } from "./types.ts";
 
 export type ScysMode = "highlights" | "projects" | "latest" | "manuals";
+export const MAX_ARCHIVE_CONTENT_CHARS = 500_000;
 
 type StageItem = {
   rawId: string;
@@ -367,7 +368,7 @@ function toStageItem(
       url,
       title,
       summary,
-      content: rawBody.slice(0, 8000),
+      content: rawBody.slice(0, MAX_ARCHIVE_CONTENT_CHARS),
       author,
       publishedAt,
       tags: extractTags(dto, fallbackTag),
@@ -408,7 +409,7 @@ function toStageItem(
       url,
       title,
       summary,
-      content: [metaHeader, rawBody].filter(Boolean).join("\n\n").slice(0, 8000),
+      content: [metaHeader, rawBody].filter(Boolean).join("\n\n").slice(0, MAX_ARCHIVE_CONTENT_CHARS),
       metaHeader,
       author: firstString(rec, ["author", "authorName", "creator"]) || null,
       publishedAt,
@@ -443,7 +444,7 @@ function toStageItem(
     url,
     title,
     summary,
-    content: rawBody.slice(0, 8000),
+    content: rawBody.slice(0, MAX_ARCHIVE_CONTENT_CHARS),
     author: firstString(rec, ["author", "authorName", "creator"]) || null,
     publishedAt,
     tags: extractTags(rec, fallbackTag),
@@ -510,10 +511,10 @@ function formatDetailContent(
 } {
   if (typeof detail === "string") {
     const decoded = decodeScysInlineTags(detail);
-    return { content: [metaHeader, decoded].filter(Boolean).join("\n\n").slice(0, 8000) };
+    return { content: [metaHeader, decoded].filter(Boolean).join("\n\n").slice(0, MAX_ARCHIVE_CONTENT_CHARS) };
   }
   const root = asRecord(detail);
-  if (!root) return { content: fallbackContent.slice(0, 8000) };
+  if (!root) return { content: fallbackContent.slice(0, MAX_ARCHIVE_CONTENT_CHARS) };
 
   const dto = asRecord(root.topicDTO) ?? asRecord(root.data) ?? asRecord(root.topic) ?? asRecord(root.project) ?? asRecord(root.manual) ?? root;
   const userDto = asRecord(root.topicUserDTO) ?? asRecord(dto.author) ?? asRecord(dto.user);
@@ -574,7 +575,7 @@ function formatDetailContent(
     if (commentLines.length) parts.push(`【精选评论】\n${commentLines.join("\n")}`);
   }
 
-  const merged = (parts.join("\n\n") || fallbackContent).trim().slice(0, 8000);
+  const merged = (parts.join("\n\n") || fallbackContent).trim().slice(0, MAX_ARCHIVE_CONTENT_CHARS);
   const author =
     (userDto ? firstString(userDto, ["name", "nickname", "userName"]) : "") ||
     firstString(dto, ["author", "authorName", "userName"]) ||
@@ -603,7 +604,7 @@ function formatDetailContent(
   };
 }
 
-function findExistingDetailKeys(sourceId: string, candidates: StageItem[]): Set<string> {
+export function findExistingDetailKeys(sourceId: string, candidates: StageItem[]): Set<string> {
   if (!candidates.length) return new Set();
   const extIds = candidates.map((c) => c.externalId);
   const placeholders = extIds.map(() => "?").join(", ");
@@ -612,7 +613,8 @@ function findExistingDetailKeys(sourceId: string, candidates: StageItem[]): Set<
     const rows = all<{ external_id: string }>(
       `SELECT external_id FROM items
        WHERE ((source_id = ? AND external_id IN (${placeholders})) OR external_id IN (${placeholders}))
-         AND content IS NOT NULL AND TRIM(content) != ''`,
+         AND content IS NOT NULL AND TRIM(content) != ''
+         AND (LENGTH(content) < 7995 OR LENGTH(content) > 8005)`,
       sourceId,
       ...extIds,
       ...extIds,

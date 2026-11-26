@@ -56,6 +56,7 @@ type MockServerState = {
   projectCasesCalls: Array<Record<string, unknown>>;
   lastSessionIdSeen: string | null;
   lastCodeChallenge: string | null;
+  longTopicBodyById: Record<string, string>;
   validTokens: Set<string>;
 };
 
@@ -88,6 +89,7 @@ function startMockScysServer() {
     projectCasesCalls: [],
     lastSessionIdSeen: null,
     lastCodeChallenge: null,
+    longTopicBodyById: {},
     validTokens: new Set(["access-token-1"]),
   };
 
@@ -445,6 +447,7 @@ function startMockScysServer() {
           assert.ok(args.entityType && args.entityId, "topicDetail 必须传 entityType 和 entityId");
           state.topicDetailCalls.push({ entityType: args.entityType, entityId: args.entityId, token });
           const eid = String(args.entityId);
+          const customBody = state.longTopicBodyById[eid];
           result = {
             content: [
               {
@@ -454,10 +457,11 @@ function startMockScysServer() {
                     entityType: args.entityType,
                     entityId: eid,
                     articleContent:
+                      customBody ??
                       `正文详情(${eid})：` +
-                      '<e type="text_bold" title="%E3%80%8C%E6%A0%B8%E5%BF%83%E6%96%B9%E6%B3%95%E3%80%8D" /> ' +
-                      '<e type="web" href="https%3A%2F%2Fscys.com%2Fdoc%2F1" title="%E5%AE%9E%E6%88%98SOP" /> ' +
-                      '<e type="hashtag" title="%23AI%E5%89%AF%E4%B8%9A%23" />',
+                        '<e type="text_bold" title="%E3%80%8C%E6%A0%B8%E5%BF%83%E6%96%B9%E6%B3%95%E3%80%8D" /> ' +
+                        '<e type="web" href="https%3A%2F%2Fscys.com%2Fdoc%2F1" title="%E5%AE%9E%E6%88%98SOP" /> ' +
+                        '<e type="hashtag" title="%23AI%E5%89%AF%E4%B8%9A%23" />',
                   },
                   documentList: [{ title: "飞书补充表", content: "飞书文档补充SOP与工具清单" }],
                   topicCommentDTOList: [
@@ -602,6 +606,7 @@ beforeEach(() => {
   mock.state.projectCasesCalls = [];
   mock.state.lastSessionIdSeen = null;
   mock.state.lastCodeChallenge = null;
+  mock.state.longTopicBodyById = {};
   mock.resetTokens();
 });
 
@@ -1121,4 +1126,85 @@ test("真实落库回归：二次采集不覆盖已有 items.content，且超限
   )!;
   assert.equal(row1AfterRun2.content, row1AfterRun1.content, "二次采集不得覆盖已有完整 content");
   assert.ok(row2AfterRun2.content?.includes("正文详情(1002)"), "超限未抓详情条目应在下轮自动补抓并落库");
+});
+
+test("超长万字富文本无损归档 (>20,000字)、旧 8,000 字截断记录自愈重抓与 10 年长期保留升级", async () => {
+  const { applyScysPreset } = await import("../scripts/scys-preset.ts");
+  const { getRetention, saveRetention } = await import("../src/server/retention.ts");
+
+  // 1) 重置为上游默认 180 天保留策略，验证 applyScysPreset 升级为 10 年长期归档并允许历史老帖入库
+  run("DELETE FROM settings WHERE key = 'retention'");
+  assert.equal(getRetention().keptDays, 180);
+  const presetOut = applyScysPreset();
+  assert.equal(presetOut.retentionUpgraded, true);
+  assert.deepEqual(
+    { itemDays: getRetention().itemDays, keptDays: getRetention().keptDays, auto: getRetention().auto },
+    { itemDays: 3650, keptDays: 3650, auto: false },
+  );
+
+  saveScysAuth({
+    mcpUrl: `${mock.state.baseUrl}/shengcai-web/mcp`,
+    clientId: "mock-client-123",
+    accessToken: "access-token-1",
+    refreshToken: "refresh-token-1",
+    expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+    tokenEndpoint: `${mock.state.baseUrl}/mcp-oauth/token`,
+    updatedAt: new Date().toISOString(),
+  });
+
+  // 2) 模拟库内已有一条旧版 8,000 字截断的记录 (1001) 与一条正常的短详情记录 (1002)
+  const truncated8000 = "OLD_TRUNCATED_".padEnd(8000, "X");
+  assert.equal(truncated8000.length, 8000);
+  run(
+    `INSERT INTO items (source_id, external_id, url, url_key, title, content, first_seen_at, last_seen_at)
+     VALUES ('scys-highlights', 'scys-topic-xq_topic-1001', 'https://scys.com/articleDetail/xq_topic/1001', 'scys.com/articleDetail/xq_topic/1001', 'old-1001', ?, datetime('now'), datetime('now')),
+            ('scys-highlights', 'scys-topic-xq_topic-1002', 'https://scys.com/articleDetail/xq_topic/1002', 'scys.com/articleDetail/xq_topic/1002', 'ok-1002', '短文完整详情', datetime('now'), datetime('now'))`,
+    truncated8000,
+  );
+
+  // 超过 20,000 字的 Tiptap HTML 万字长文
+  const longHtml = `<div class="tiptap-wrapper"><h1>万字长文实操</h1><p>${"长文干货段落".repeat(4000)}</p><p>结尾总结</p></div>`;
+  assert.ok(longHtml.length > 24_000);
+  mock.state.longTopicBodyById["1001"] = longHtml;
+
+  const collector = createScysCollector(() => new ScysMcpClient({ minIntervalMs: 0 }));
+
+  // 3) 重扫：1001 因 LENGTH(content) === 8000 触发 Stage 2 自愈重抓，1002 跳过；且全文 > 20,000 字不被截断
+  const healRun = await collector.collect({
+    sourceId: "scys-highlights",
+    config: { mode: "highlights", pageSize: 10, fetchDetail: true, maxDetailPerRun: 8 },
+    cursor: null,
+    maxItems: 20,
+    http: {} as never,
+    log: () => {},
+  });
+  assert.deepEqual(
+    mock.state.topicDetailCalls.map((c) => c.entityId),
+    ["1001"],
+  );
+  const healedItem = healRun.items.find((i) => i.externalId === "scys-topic-xq_topic-1001")!;
+  assert.ok((healedItem.content?.length ?? 0) > 24_000, "超过 20,000 字的长文不得被截断到 8,000 字");
+  assert.ok(healedItem.content?.includes("结尾总结"));
+
+  ingestItems("scys-highlights", healRun.items);
+  const rowAfterHeal = get<{ content: string }>(
+    "SELECT content FROM items WHERE source_id = 'scys-highlights' AND external_id = 'scys-topic-xq_topic-1001'",
+  )!;
+  assert.ok(rowAfterHeal.content.length > 24_000);
+  assert.ok(rowAfterHeal.content.includes("结尾总结"));
+
+  // 4) 再次采集：1001 已经是 >8005 字的完整归档，不应再重复拉 Stage 2
+  mock.state.topicDetailCalls = [];
+  await collector.collect({
+    sourceId: "scys-highlights",
+    config: { mode: "highlights", pageSize: 10, fetchDetail: true, maxDetailPerRun: 8 },
+    cursor: null,
+    maxItems: 20,
+    http: {} as never,
+    log: () => {},
+  });
+  assert.deepEqual(mock.state.topicDetailCalls, []);
+
+  // 恢复默认 retention 避免影响其他测试
+  saveRetention({ itemDays: 60, keptDays: 180, auto: true });
 });

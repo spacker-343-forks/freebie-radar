@@ -2,6 +2,7 @@ import { all, closeDb, migrate, run } from "../src/server/db.ts";
 import { SEEDS, ensureSources } from "../src/server/collectors/index.ts";
 import { getAiSettings, saveAiSettings, type AiSettings } from "../src/server/enrich/ai.ts";
 import { getPushSettings, savePushSettings } from "../src/server/push.ts";
+import { getRetention, saveRetention } from "../src/server/retention.ts";
 import { CATEGORY_DESC, CATEGORY_KEYS, CONTENT_KIND_KEYS, OBTAIN_KEYS } from "../src/shared/taxonomy.ts";
 
 const SCYS_SYSTEM_PROMPT = [
@@ -114,6 +115,14 @@ export function applyScysPreset() {
     pushUpdated = true;
   }
 
+  // 上游福利站默认 180 天清理并丢弃历史帖；生财精华需长期归档保留
+  const curRetention = getRetention();
+  let retentionUpgraded = false;
+  if (curRetention.keptDays <= 180) {
+    saveRetention({ itemDays: 3650, keptDays: 3650, auto: false });
+    retentionUpgraded = true;
+  }
+
   const now = new Date().toISOString();
   let rulesInserted = 0;
   for (const pattern of SCYS_BLOCK_RULES) {
@@ -147,6 +156,7 @@ export function applyScysPreset() {
     aiConcurrency: currentAi.concurrency,
     aiTimeoutSec: currentAi.timeoutSec,
     pushUpdated,
+    retentionUpgraded,
   };
 }
 
@@ -167,6 +177,9 @@ if (isMain) {
     }
     if (summary.pushUpdated) {
       console.log("[scys-preset] 已将推送与每日精选筛选更新为适配生财全形态（info/opensource/freebie/deal，不限门槛）");
+    }
+    if (summary.retentionUpgraded) {
+      console.log("[scys-preset] 已将内容保留期升级为 10 年长期归档（itemDays=3650, keptDays=3650, auto=false）");
     }
     console.log(`[scys-preset] 全局屏蔽规则新增 ${summary.rulesInserted} 条（预设共 ${summary.totalBlockRules} 条，重复执行幂等）`);
   } finally {
