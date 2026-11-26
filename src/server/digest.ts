@@ -7,7 +7,14 @@ import { isBlocked, loadActiveBlockRules } from "./enrich/blocklist.ts";
 import { getPushSettings, passesPushFilters, sourceLabel, type PushSettings } from "./push.ts";
 import { sendTelegram } from "./telegram.ts";
 import { buildHotReport } from "./hot.ts";
+import {
+  stripThresholdPrefix,
+  validateDigestReport,
+  type DigestPick,
+  type DigestReport,
+} from "../shared/digest.ts";
 export { sendTelegram };
+export type { DigestPick, DigestReport };
 export type DigestItem = {
   id: number;
   source_id: string;
@@ -215,30 +222,73 @@ function extractAiReason(rawAi: string | null | undefined): string {
   }
 }
 
+function defaultSectionTitles(mode: "daily" | "weekly") {
+  return mode === "daily"
+    ? {
+        introTitle: "🎯 今日核心风向",
+        picksTitle: "🔥 必看实战拆解",
+        closingTitle: "⚠️ 今日避坑提醒",
+      }
+    : {
+        introTitle: "📈 本周赛道风向",
+        picksTitle: "🏆 本周 Top 精选拆解",
+        closingTitle: "💡 下周行动建议",
+      };
+}
+
+export function formatReportAsPlainText(report: DigestReport): string {
+  const lines: string[] = [];
+  lines.push(report.introTitle);
+  for (const pt of report.introPoints) lines.push(`- ${pt}`);
+  lines.push("", report.picksTitle);
+  report.picks.forEach((p, idx) => {
+    lines.push(`${idx + 1}. ${p.title}`);
+    if (p.summary) lines.push(`   ${p.summary}`);
+    if (p.threshold) lines.push(`   [底牌门槛] ${p.threshold}`);
+    if (p.url) lines.push(`   原文：${p.url}`);
+    lines.push("");
+  });
+  if (report.closingPoints.length) {
+    lines.push(report.closingTitle);
+    for (const pt of report.closingPoints) lines.push(`- ${pt}`);
+  }
+  return lines.join("\n").trim();
+}
+
 function buildEditorSystemPrompt(mode: "daily" | "weekly", topN: number): string {
-  const sections =
+  const titles = defaultSectionTitles(mode);
+  const closingInstruction =
     mode === "daily"
-      ? [
-          "1. `🎯 今日核心风向`（总结今日最值得关注的 1-2 个生财机会与共同规律）",
-          "2. `🔥 必看实战拆解`（按入选顺序逐条拆解，每条 2~3 句讲清核心打法、关键数据与 `[底牌门槛]`，并附上原始链接）",
-          "3. `⚠️ 今日避坑提醒`（提炼门槛风险、隐性成本或需要警惕的伪需求）",
-        ]
-      : [
-          "1. `📈 本周赛道风向`（提炼本周高密度赛道趋势与风向变化）",
-          "2. `🏆 本周 Top 精选拆解`（逐条拆解最值得深挖的项目/SOP/开源工具，写清核心打法、真实数据、`[底牌门槛]` 与原始链接）",
-          "3. `💡 下周行动建议`（给出不同底牌读者的可执行下一步）",
-        ];
+      ? "提炼 1~3 条门槛风险、隐性成本或需要警惕的伪需求"
+      : "给出 1~3 条不同底牌读者的可执行下一步行动建议";
 
   return [
     "你是「生财有术私人商业情报主编」。",
-    `请从候选条目中优中选优，挑选赛道互补、实操性最强的最多 ${topN} 条（不足 ${topN} 条则全选），并撰写排版清爽、适合手机阅读的中文深度内参。`,
+    `请从候选条目中优中选优，挑选赛道互补、实操性最强的最多 ${topN} 条（不足 ${topN} 条则全选），并输出结构化 JSON 深度内参。`,
     "",
     "必须严格输出单个 JSON 对象（不要输出 Markdown 代码围栏或多余解释）：",
-    '{"selectedIds": [123, 456], "briefing": "..."}',
+    JSON.stringify({
+      selectedIds: [123, 456],
+      report: {
+        introTitle: titles.introTitle,
+        introPoints: ["核心风向判断 1", "核心风向判断 2"],
+        picksTitle: titles.picksTitle,
+        picks: [
+          {
+            id: 123,
+            title: "条目核心标题",
+            summary: "2~3 句讲清核心打法、关键数据与可复现步骤（不含链接与门槛前缀）",
+            threshold: "说明前置底牌门槛/所需资源或风险提示（不要包含 [底牌门槛] 前缀本身）",
+          },
+        ],
+        closingTitle: titles.closingTitle,
+        closingPoints: [closingInstruction],
+      },
+    }),
     "- `selectedIds` 必须是候选列表中的整数 `id` 数组（去重且按推荐优先级排序）。",
-    "- `briefing` 必须使用分段纯文本/轻量 emoji 排版，包含以下三个固定板块：",
-    ...sections,
-    "- 严禁编造候选内容未提及的收益数字或链接；每条拆解务必带上 `[底牌门槛]` 提示。",
+    "- `report.picks` 顺序需与 `selectedIds` 对齐，每条必须保留真实的 `id`。",
+    "- `threshold` 只写具体门槛或前置条件（如「需编程能力与海外收款账号」「零代码可直接跟练」），不要带 `[底牌门槛]` 字样。",
+    "- 严禁编造候选内容未提及的收益数字或链接。",
   ].join("\n");
 }
 
@@ -248,12 +298,12 @@ async function synthesizeDigestWithAi(
   date: Date,
   topN: number,
   options: { fetchImpl?: typeof fetch; log?: (m: string) => void } = {},
-): Promise<{ items: DigestItem[]; text: string }> {
+): Promise<{ items: DigestItem[]; text: string; report: DigestReport | null }> {
   const fallbackItems = candidates.slice(0, topN);
   const fallbackText = mode === "daily" ? formatDigest(fallbackItems, date) : formatWeekly(fallbackItems, date);
   const s = getAiSettings();
   if (!candidates.length || !aiReady(s)) {
-    return { items: fallbackItems, text: fallbackText };
+    return { items: fallbackItems, text: fallbackText, report: null };
   }
 
   const candidateById = new Map(candidates.map((it) => [it.id, it]));
@@ -291,45 +341,97 @@ async function synthesizeDigestWithAi(
     const content = data.choices?.[0]?.message?.content ?? "";
     const jsonText = /\{[\s\S]*\}/.exec(content)?.[0];
     if (!jsonText) throw new Error("AI 主编未返回 JSON 对象");
-    const parsed = JSON.parse(jsonText) as { selectedIds?: unknown; briefing?: unknown };
-    if (typeof parsed.briefing !== "string" || !parsed.briefing.trim()) {
-      throw new Error("AI 主编 briefing 为空");
-    }
+    const parsed = JSON.parse(jsonText) as {
+      selectedIds?: unknown;
+      report?: unknown;
+      briefing?: unknown;
+    };
 
+    const titles = defaultSectionTitles(mode);
+    const parsedReport = validateDigestReport(parsed.report);
     const pickedIds: number[] = [];
     const seen = new Set<number>();
+    const pushValidId = (rawId: unknown) => {
+      if (typeof rawId !== "number" || !Number.isInteger(rawId)) return;
+      if (!candidateById.has(rawId) || seen.has(rawId) || pickedIds.length >= topN) return;
+      seen.add(rawId);
+      pickedIds.push(rawId);
+    };
+
     if (Array.isArray(parsed.selectedIds)) {
-      for (const rawId of parsed.selectedIds) {
-        if (typeof rawId !== "number" || !Number.isInteger(rawId)) continue;
-        if (!candidateById.has(rawId) || seen.has(rawId)) continue;
-        seen.add(rawId);
-        pickedIds.push(rawId);
-        if (pickedIds.length >= topN) break;
-      }
+      for (const rawId of parsed.selectedIds) pushValidId(rawId);
     }
-    // AI 返回不足 topN 时按候选池原高分顺序补齐
-    for (const c of candidates) {
-      if (pickedIds.length >= Math.min(topN, candidates.length)) break;
-      if (seen.has(c.id)) continue;
-      seen.add(c.id);
-      pickedIds.push(c.id);
+    if (!pickedIds.length && parsedReport) {
+      for (const p of parsedReport.picks) pushValidId(p.id);
     }
 
-    const selectedItems = pickedIds.map((id) => candidateById.get(id)!).filter(Boolean);
-    return {
-      items: selectedItems,
-      text: parsed.briefing.trim(),
-    };
+    if (parsedReport) {
+      const normalizedPicks: DigestPick[] = [];
+      for (const pick of parsedReport.picks) {
+        const matched = pick.id !== undefined ? candidateById.get(pick.id) : undefined;
+        if (pick.id !== undefined && !matched) continue;
+        normalizedPicks.push({
+          ...(matched ? { id: matched.id } : {}),
+          title: pick.title || matched?.title || "",
+          summary: pick.summary,
+          threshold: stripThresholdPrefix(pick.threshold),
+          ...(matched?.url ? { url: matched.url } : pick.url ? { url: pick.url } : {}),
+        });
+      }
+      if (normalizedPicks.length) {
+        for (const p of normalizedPicks) pushValidId(p.id);
+        for (const c of candidates) {
+          if (pickedIds.length >= Math.min(topN, candidates.length)) break;
+          pushValidId(c.id);
+        }
+        const finalReport: DigestReport = {
+          introTitle: parsedReport.introTitle || titles.introTitle,
+          introPoints: parsedReport.introPoints,
+          picksTitle: parsedReport.picksTitle || titles.picksTitle,
+          picks: normalizedPicks,
+          closingTitle: parsedReport.closingTitle || titles.closingTitle,
+          closingPoints: parsedReport.closingPoints,
+        };
+        const selectedItems = pickedIds.map((id) => candidateById.get(id)!).filter(Boolean);
+        return {
+          items: selectedItems,
+          text: formatReportAsPlainText(finalReport),
+          report: finalReport,
+        };
+      }
+    }
+
+    if (typeof parsed.briefing === "string" && parsed.briefing.trim()) {
+      for (const c of candidates) {
+        if (pickedIds.length >= Math.min(topN, candidates.length)) break;
+        pushValidId(c.id);
+      }
+      const selectedItems = pickedIds.map((id) => candidateById.get(id)!).filter(Boolean);
+      return {
+        items: selectedItems,
+        text: parsed.briefing.trim(),
+        report: null,
+      };
+    }
+
+    throw new Error("AI 主编未返回有效 report 或 briefing");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     (options.log ?? console.warn)(`[${mode}] AI 主编合成失败，优雅回退默认格式: ${msg}`);
-    return { items: fallbackItems, text: fallbackText };
+    return { items: fallbackItems, text: fallbackText, report: null };
   } finally {
     clearTimeout(timer);
   }
 }
 
-export type DailyResult = { date: string; count: number; text: string; pushed: boolean; skippedReason?: string };
+export type DailyResult = {
+  date: string;
+  count: number;
+  text: string;
+  report?: DigestReport | null;
+  pushed: boolean;
+  skippedReason?: string;
+};
 
 export async function runDaily(options: {
   dryRun?: boolean;
@@ -342,7 +444,7 @@ export async function runDaily(options: {
   const key = dayKey(date);
   const topN = config.dailyTopN;
   const candidates = selectDailyPool(date, Math.max(topN * 2, 20));
-  const { items, text } = await synthesizeDigestWithAi(candidates, "daily", date, topN, {
+  const { items, text, report } = await synthesizeDigestWithAi(candidates, "daily", date, topN, {
     fetchImpl: options.fetchImpl,
     log,
   });
@@ -350,19 +452,21 @@ export async function runDaily(options: {
   if (options.dryRun) {
     log("[daily] dry-run " + key + " items=" + items.length);
     log(text);
-    return { date: key, count: items.length, text, pushed: false, skippedReason: "dry-run" };
+    return { date: key, count: items.length, text, report, pushed: false, skippedReason: "dry-run" };
   }
+
+  const payloadJson = JSON.stringify({ text, count: items.length, ...(report ? { report } : {}) });
 
   if (config.pushChannel === "none") {
     run(
       "INSERT INTO digests (date, item_ids, payload, created_at, pushed_at) VALUES (?, ?, ?, ?, NULL) ON CONFLICT(date) DO UPDATE SET item_ids = excluded.item_ids, payload = excluded.payload",
       key,
       JSON.stringify(items.map((i) => i.id)),
-      JSON.stringify({ text, count: items.length }),
+      payloadJson,
       new Date().toISOString(),
     );
     log("[daily] " + key + " 已生成 " + items.length + " 条（PUSH_CHANNEL=none，仅落库）");
-    return { date: key, count: items.length, text, pushed: false, skippedReason: "push disabled" };
+    return { date: key, count: items.length, text, report, pushed: false, skippedReason: "push disabled" };
   }
 
   if (!config.telegramBotToken || !config.telegramChatId) {
@@ -374,12 +478,12 @@ export async function runDaily(options: {
     "INSERT INTO digests (date, item_ids, payload, created_at, pushed_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(date) DO UPDATE SET item_ids = excluded.item_ids, payload = excluded.payload, pushed_at = excluded.pushed_at",
     key,
     JSON.stringify(items.map((i) => i.id)),
-    JSON.stringify({ text, count: items.length }),
+    payloadJson,
     new Date().toISOString(),
     new Date().toISOString(),
   );
   log("[daily] " + key + " 已推送 " + items.length + " 条到 Telegram");
-  return { date: key, count: items.length, text, pushed: true };
+  return { date: key, count: items.length, text, report, pushed: true };
 }
 
 export function lastDigests(limit = 10) {
@@ -507,7 +611,14 @@ export function formatWeekly(items: DigestItem[], date = new Date()): string {
   return lines.join("\n");
 }
 
-export type WeeklyResult = { date: string; count: number; text: string; pushed: boolean; skippedReason?: string };
+export type WeeklyResult = {
+  date: string;
+  count: number;
+  text: string;
+  report?: DigestReport | null;
+  pushed: boolean;
+  skippedReason?: string;
+};
 
 export async function runWeekly(options: {
   dryRun?: boolean;
@@ -520,7 +631,7 @@ export async function runWeekly(options: {
   const key = weekKey(date);
   const topN = 20;
   const candidates = selectWeeklyPool(date, Math.max(topN * 2, 20));
-  const { items, text } = await synthesizeDigestWithAi(candidates, "weekly", date, topN, {
+  const { items, text, report } = await synthesizeDigestWithAi(candidates, "weekly", date, topN, {
     fetchImpl: options.fetchImpl,
     log,
   });
@@ -528,8 +639,15 @@ export async function runWeekly(options: {
   if (options.dryRun) {
     log("[weekly] dry-run " + key + " items=" + items.length);
     log(text);
-    return { date: key, count: items.length, text, pushed: false, skippedReason: "dry-run" };
+    return { date: key, count: items.length, text, report, pushed: false, skippedReason: "dry-run" };
   }
+
+  const payloadJson = JSON.stringify({
+    text,
+    count: items.length,
+    range: key,
+    ...(report ? { report } : {}),
+  });
 
   const save = (pushedAt: string | null) =>
     run(
@@ -538,7 +656,7 @@ export async function runWeekly(options: {
          pushed_at = COALESCE(excluded.pushed_at, digests.pushed_at), kind = 'weekly'`,
       key,
       JSON.stringify(items.map((i) => i.id)),
-      JSON.stringify({ text, count: items.length, range: key }),
+      payloadJson,
       new Date().toISOString(),
       pushedAt,
     );
@@ -546,11 +664,11 @@ export async function runWeekly(options: {
   if (config.pushChannel !== "telegram" || !config.telegramBotToken || !config.telegramChatId) {
     save(null);
     log("[weekly] " + key + " 已生成 " + items.length + " 条（推送未启用，仅落库）");
-    return { date: key, count: items.length, text, pushed: false, skippedReason: "push disabled" };
+    return { date: key, count: items.length, text, report, pushed: false, skippedReason: "push disabled" };
   }
 
   await sendTelegram(text);
   save(new Date().toISOString());
   log("[weekly] " + key + " 已推送 " + items.length + " 条到 Telegram");
-  return { date: key, count: items.length, text, pushed: true };
+  return { date: key, count: items.length, text, report, pushed: true };
 }

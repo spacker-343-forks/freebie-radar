@@ -51,6 +51,7 @@ import {
 } from "./collectors/index.ts";
 import type { RawItem } from "./collectors/types.ts";
 import { lastDigests, runDaily, runWeekly } from "./digest.ts";
+import { validateDigestReport, type DigestReport } from "../shared/digest.ts";
 import { buildHotReport, sourceQuality } from "./hot.ts";
 import { sendTelegram } from "./telegram.ts";
 import {
@@ -1643,10 +1644,14 @@ const fetchLimit = Math.min(Math.max(offset + limit * 3, 240), 600);
       ids = [];
     }
     let text = "";
+    let report: DigestReport | null = null;
     try {
-      text = String((JSON.parse(row.payload) as { text?: string }).text ?? "");
+      const payload = JSON.parse(row.payload) as { text?: unknown; report?: unknown };
+      text = typeof payload.text === "string" ? payload.text : String(payload.text ?? "");
+      report = validateDigestReport(payload.report);
     } catch {
       text = "";
+      report = null;
     }
     const rawItems = ids.length
       ? all<ItemRow>(`SELECT * FROM items WHERE id IN (${ids.map(() => "?").join(",")})`, ...ids)
@@ -1663,6 +1668,7 @@ const fetchLimit = Math.min(Math.max(offset + limit * 3, 240), 600);
       created_at: row.created_at,
       pushed_at: row.pushed_at,
       text,
+      report,
       count: ids.length,
       items: applyUserStates(
         items.map((r) => shape(r, subKeywords)),

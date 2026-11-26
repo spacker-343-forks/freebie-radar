@@ -316,13 +316,55 @@ test("纯生财源默认推送态放行 info/opensource 与历史回溯补位，
       return new Response("upstream error", { status: 500 });
     }
     const isWeekly = body.messages[0]!.content.includes("本周赛道风向");
-    const briefing = isWeekly
-      ? "📈 本周赛道风向\nAI 工作流加速。\n\n🏆 本周 Top 精选拆解\n1. SaaS 拆解 [需投流]\n\n💡 下周行动建议\n先跑通 MVP。"
-      : "🎯 今日核心风向\n关注 AI 自动化。\n\n🔥 必看实战拆解\n1. 成本拆解 [需投流]\n\n⚠️ 今日避坑提醒\n控制投流预算。";
+    const report = isWeekly
+      ? {
+          introTitle: "📈 本周赛道风向",
+          introPoints: ["AI 工作流加速。"],
+          picksTitle: "🏆 本周 Top 精选拆解",
+          picks: [
+            {
+              id: backfillId,
+              title: "海外独立 SaaS 月入 5000 刀成本拆解",
+              summary: "含 GitHub 源码与完整投流测算，可直接对照复刻。",
+              threshold: "[底牌门槛] 需投流预算",
+              url: "https://hallucinated.invalid/should-be-replaced",
+            },
+            {
+              id: recentId,
+              title: "Claude Code + MCP 自动化变现实战 SOP",
+              summary: "拆解自动化工作流步骤与转化路径。",
+              threshold: "需编程基础",
+            },
+          ],
+          closingTitle: "💡 下周行动建议",
+          closingPoints: ["先跑通 MVP。"],
+        }
+      : {
+          introTitle: "🎯 今日核心风向",
+          introPoints: ["关注 AI 自动化。"],
+          picksTitle: "🔥 必看实战拆解",
+          picks: [
+            {
+              id: backfillId,
+              title: "海外独立 SaaS 月入 5000 刀成本拆解",
+              summary: "拆解成本结构与获客漏斗。",
+              threshold: "需投流预算",
+              url: "https://hallucinated.invalid/should-be-replaced",
+            },
+            {
+              id: recentId,
+              title: "Claude Code + MCP 自动化变现实战 SOP",
+              summary: "从接入 MCP 到变现闭环的实操指南。",
+              threshold: "[底牌门槛] 需编程",
+            },
+          ],
+          closingTitle: "⚠️ 今日避坑提醒",
+          closingPoints: ["控制投流预算。"],
+        };
     // 故意把 backfillId 排在前面并混入一个无效 ID 999999 测试校验与重排
     return new Response(
       JSON.stringify({
-        choices: [{ message: { content: JSON.stringify({ selectedIds: [999999, backfillId, recentId], briefing }) } }],
+        choices: [{ message: { content: JSON.stringify({ selectedIds: [999999, backfillId, recentId], report }) } }],
       }),
       { headers: { "content-type": "application/json" } },
     );
@@ -332,23 +374,68 @@ test("纯生财源默认推送态放行 info/opensource 与历史回溯补位，
     const dailyRes = await runDaily({ dryRun: false, date: now });
     assert.equal(dailyRes.count, 2);
     assert.ok(dailyRes.text.includes("🎯 今日核心风向"));
+    assert.ok(dailyRes.text.includes("[底牌门槛] 需投流预算"));
+    assert.equal(dailyRes.report?.picks[0]?.threshold, "需投流预算");
+    assert.equal(dailyRes.report?.picks[1]?.threshold, "需编程");
+    assert.ok(dailyRes.report?.picks[0]?.url?.startsWith("https://example.com/"), "须用真实条目 URL 覆盖幻觉链接");
     assert.equal(sentRequests[0]!.model, "gpt-6.1-terra");
     assert.equal(sentRequests[0]!.reasoning_effort, "high");
     assert.equal(sentRequests[0]!.hasTemp, false);
     const savedDaily = get<{ item_ids: string }>("SELECT item_ids FROM digests WHERE date = ?", dailyRes.date)!;
     assert.deepEqual(JSON.parse(savedDaily.item_ids), [backfillId, recentId]);
 
+    const apiDailyRes = await app.request(`/api/digests/${dailyRes.date}`);
+    assert.equal(apiDailyRes.status, 200);
+    const apiDailyJson = (await apiDailyRes.json()) as {
+      text: string;
+      report: { introTitle: string; picks: Array<{ id?: number; threshold: string; url?: string }> } | null;
+      items: Array<{ id: number }>;
+    };
+    assert.equal(apiDailyJson.report?.introTitle, "🎯 今日核心风向");
+    assert.equal(apiDailyJson.report?.picks.length, 2);
+    assert.equal(apiDailyJson.report?.picks[0]?.threshold, "需投流预算");
+    assert.equal(apiDailyJson.report?.picks[1]?.threshold, "需编程");
+    assert.deepEqual(apiDailyJson.items.map((it) => it.id), [backfillId, recentId]);
+
     const weeklyRes = await runWeekly({ dryRun: false, date: now });
     assert.equal(weeklyRes.count, 2);
     assert.ok(weeklyRes.text.includes("📈 本周赛道风向"));
+    assert.equal(weeklyRes.report?.picks[0]?.threshold, "需投流预算");
     const savedWeekly = get<{ item_ids: string }>("SELECT item_ids FROM digests WHERE date = ?", weeklyRes.date)!;
     assert.deepEqual(JSON.parse(savedWeekly.item_ids), [backfillId, recentId]);
 
+    // 兼容旧版仅返回 briefing 字符串的 JSON（report 应为 null，text 保留原样）
+    run("DELETE FROM digests");
+    t.mock.method(globalThis, "fetch", async () =>
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  selectedIds: [recentId, backfillId],
+                  briefing: "🎯 今日核心风向\n- 旧版纯文本兼容。",
+                }),
+              },
+            },
+          ],
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    const legacyRes = await runDaily({ dryRun: true, date: now });
+    assert.equal(legacyRes.report, null);
+    assert.ok(legacyRes.text.includes("旧版纯文本兼容"));
+
     // AI 异常时优雅回退默认 formatDigest / formatWeekly
+    run("DELETE FROM digests");
     failNext = true;
+    t.mock.method(globalThis, "fetch", async () => new Response("upstream error", { status: 500 }));
     const fallbackDaily = await runDaily({ dryRun: true, date: now });
+    assert.equal(fallbackDaily.report, null);
     assert.ok(fallbackDaily.text.includes("资源雷达"));
     const fallbackWeekly = await runWeekly({ dryRun: true, date: now });
+    assert.equal(fallbackWeekly.report, null);
     assert.ok(fallbackWeekly.text.includes("本周精选"));
   } finally {
     saveAiSettings({ enabled: false, baseUrl: "", model: "", apiKey: "" });
