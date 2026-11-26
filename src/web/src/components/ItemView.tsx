@@ -15,20 +15,14 @@ import {
   X,
 } from "lucide-react";
 import { KIND_LABEL, OBTAIN_HINT, OBTAIN_LABEL, categoryLabelForKind, expiresLabel, extractBlockCandidates, timeAgo } from "../lib/sources.ts";
+import { isSummaryCoveredByContent, plainCharCount, splitReasonBadge } from "../lib/snapshot.ts";
+import { SnapshotContent } from "./SnapshotContent.tsx";
 import type { Item } from "../types.ts";
 import { ItemClassificationEditor, type ClassificationPatch } from "./ItemClassificationEditor.tsx";
 import { t } from "../lib/i18n.ts";
 import { useNow } from "../lib/clock.ts";
 
-/** 识别单条 reason 开头的 `[底牌]` / `【底牌】` 前缀（长度 2~18 字），拆为徽章与正文。 */
-export function splitReasonBadge(reason: string): { badge: string | null; text: string } {
-  const trimmed = reason.trim();
-  const match = /^(?:\[([^\]\n]{2,18})\]|【([^】\n]{2,18})】)\s*(.*)$/s.exec(trimmed);
-  if (!match) return { badge: null, text: trimmed };
-  const badge = (match[1] ?? match[2] ?? "").trim();
-  const rest = (match[3] ?? "").trim();
-  return badge ? { badge, text: rest } : { badge: null, text: trimmed };
-}
+export { splitReasonBadge };
 
 /** 相对时间：订阅共享时钟，只有这一小块每 30 秒重渲染。 */
 export function RelativeTime({ iso, className = "" }: { iso: string | null | undefined; className?: string }) {
@@ -384,6 +378,7 @@ function CoverImage({
   children?: React.ReactNode;
 }) {
   const [broken, setBroken] = useState(false);
+
   useEffect(() => {
     setBroken(false);
   }, [src]);
@@ -431,6 +426,7 @@ export function ItemCard({
   const matched = Array.isArray(item.matched) ? item.matched : [];
   const aiRejected = item.ai?.keep === false;
   const [imgBroken, setImgBroken] = useState(false);
+
   useEffect(() => {
     setImgBroken(false);
   }, [item.image_url]);
@@ -671,6 +667,14 @@ export function ItemDetailDrawer({
   const exp = expiresLabel(item.expires_at);
   const codes = Array.isArray(item.codes) ? item.codes : [];
   const dialogRef = useRef<HTMLElement | null>(null);
+  const [snapshotOpen, setSnapshotOpen] = useState(true);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+
+  useEffect(() => {
+    setSnapshotOpen(true);
+    setSummaryOpen(false);
+  }, [item.id]);
+
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     const overflow = document.body.style.overflow;
@@ -711,7 +715,7 @@ export function ItemDetailDrawer({
         aria-modal="true"
         aria-label={t("资源详情")}
         tabIndex={-1}
-        className="drawer-enter drawer-shadow outline-none flex h-full w-full flex-col border-ink-200 bg-surface sm:max-w-[500px] sm:border-l"
+        className="drawer-enter drawer-shadow outline-none flex h-full w-full flex-col border-ink-200 bg-surface sm:max-w-2xl sm:border-l"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 顶栏 */}
@@ -825,19 +829,57 @@ export function ItemDetailDrawer({
             </div>
           )}
 
-          {item.summary && (
-            <div>
-              <div className="mb-1 text-[12px] font-medium text-ink-500">{t("摘要")}</div>
-              <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-ink-700">{item.summary}</p>
-            </div>
-          )}
+          {item.summary && (() => {
+            const hasFullSnapshot = Boolean(item.content && item.content !== item.summary);
+            const covered = hasFullSnapshot && isSummaryCoveredByContent(item.summary, item.content);
+            if (covered) {
+              return (
+                <div className="rounded-lg border border-ink-200/80 bg-surface-hover/60 px-3 py-2 text-[12px]">
+                  <button
+                    type="button"
+                    onClick={() => setSummaryOpen((v) => !v)}
+                    className="flex w-full items-center justify-between gap-2 text-left font-medium text-ink-500 hover:text-ink-800"
+                  >
+                    <span>{t("摘要（已收录于下方完整正文）")}</span>
+                    {summaryOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                  </button>
+                  {summaryOpen && (
+                    <p className="mt-2 text-[13px] leading-relaxed whitespace-pre-wrap text-ink-600 [overflow-wrap:anywhere]">
+                      {item.summary}
+                    </p>
+                  )}
+                </div>
+              );
+            }
+            return (
+              <div>
+                <div className="mb-1 text-[12px] font-medium text-ink-500">{t("摘要")}</div>
+                <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-ink-700 [overflow-wrap:anywhere]">
+                  {item.summary}
+                </p>
+              </div>
+            );
+          })()}
 
           {item.content && item.content !== item.summary && (
-            <div className="rounded-lg border border-ink-200 bg-surface-hover p-3.5">
-              <div className="mb-1.5 text-[12px] font-medium text-ink-500">{t("正文快照（原帖被删也能留档）")}</div>
-              <p className="max-h-[260px] overflow-auto text-[13px] leading-relaxed whitespace-pre-wrap text-ink-700">
-                {item.content}
-              </p>
+            <div className="min-w-0 rounded-xl border border-ink-200 bg-surface-hover p-4 sm:p-5">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-ink-200/80 pb-2.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[12px] font-semibold text-ink-800">{t("正文快照（原帖被删也能留档）")}</span>
+                  <span className="rounded-md border border-ink-200 bg-surface px-2 py-0.5 font-mono text-[11px] text-ink-600">
+                    {t("{n} 字", { n: plainCharCount(item.content) })}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSnapshotOpen((v) => !v)}
+                  className="inline-flex items-center gap-1 text-[12px] font-medium text-accent hover:underline"
+                >
+                  {snapshotOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                  {snapshotOpen ? t("收起") : t("展开")}
+                </button>
+              </div>
+              {snapshotOpen && <SnapshotContent content={item.content} />}
             </div>
           )}
 
