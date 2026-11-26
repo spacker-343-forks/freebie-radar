@@ -20,6 +20,16 @@ import { ItemClassificationEditor, type ClassificationPatch } from "./ItemClassi
 import { t } from "../lib/i18n.ts";
 import { useNow } from "../lib/clock.ts";
 
+/** 识别单条 reason 开头的 `[底牌]` / `【底牌】` 前缀（长度 2~18 字），拆为徽章与正文。 */
+export function splitReasonBadge(reason: string): { badge: string | null; text: string } {
+  const trimmed = reason.trim();
+  const match = /^(?:\[([^\]\n]{2,18})\]|【([^】\n]{2,18})】)\s*(.*)$/s.exec(trimmed);
+  if (!match) return { badge: null, text: trimmed };
+  const badge = (match[1] ?? match[2] ?? "").trim();
+  const rest = (match[3] ?? "").trim();
+  return badge ? { badge, text: rest } : { badge: null, text: trimmed };
+}
+
 /** 相对时间：订阅共享时钟，只有这一小块每 30 秒重渲染。 */
 export function RelativeTime({ iso, className = "" }: { iso: string | null | undefined; className?: string }) {
   useNow();
@@ -299,7 +309,19 @@ export function CompactRow({
             <RelativeTime iso={item.published_at ?? item.first_seen_at} />
           </span>
         </div>
-        {showSummary && item.ai?.reason && <p title={item.ai.reason} className="row-summary mt-1 text-[12px] leading-relaxed text-ink-500">{item.ai.reason}</p>}
+        {showSummary && item.ai?.reason && (() => {
+          const { badge, text } = splitReasonBadge(item.ai.reason);
+          return (
+            <p title={item.ai.reason} className="row-summary mt-1 flex flex-wrap items-center gap-1.5 text-[12px] leading-relaxed text-ink-500">
+              {badge && (
+                <span className="inline-flex shrink-0 items-center rounded border border-code-border bg-code-subtle px-1.5 py-0.5 text-[11px] font-semibold text-code">
+                  {badge}
+                </span>
+              )}
+              {text && <span className="min-w-0 [overflow-wrap:anywhere] break-words">{text}</span>}
+            </p>
+          );
+        })()}
       </div>
 
       {/* 右端：兑换码 & 快捷操作 & 相对时间 */}
@@ -513,11 +535,19 @@ export function ItemCard({
                 {expanded ? t("收起") : t("{n} 个来源", { n: item.dupCount ?? 1 })}
               </button>
             )}
-            {item.ai?.reason && (
-              <span className={"line-clamp-1 " + (item.ai.keep === false ? "text-ink-400" : "text-deal")}>
-                {item.ai.reason}
-              </span>
-            )}
+            {item.ai?.reason && (() => {
+              const { badge, text } = splitReasonBadge(item.ai.reason);
+              return (
+                <span className={"inline-flex min-w-0 flex-wrap items-center gap-1.5 " + (item.ai.keep === false ? "text-ink-400" : "text-deal")}>
+                  {badge && (
+                    <span className="inline-flex shrink-0 items-center rounded border border-code-border bg-code-subtle px-1.5 py-0.5 text-[10px] font-semibold text-code">
+                      {badge}
+                    </span>
+                  )}
+                  {text && <span className="line-clamp-1">{text}</span>}
+                </span>
+              );
+            })()}
           </div>
         )}
 
@@ -748,33 +778,41 @@ export function ItemDetailDrawer({
           <h2 className="text-[17px] leading-snug font-semibold text-ink-950">{item.title}</h2>
           {onClassificationSave && item.manualClassification !== undefined && !loading && !error && <ItemClassificationEditor key={item.id} item={item} onSave={onClassificationSave} />}
 
-          {item.ai?.reason && (
-            <div
-              className={
-                "flex items-center gap-2 rounded-lg border px-3.5 py-2.5 text-[12px] " +
-                (item.ai.keep === false
-                  ? "border-ink-200 bg-ink-100/70 text-ink-600"
-                  : "border-deal-border bg-deal-subtle/70 text-deal")
-              }
-            >
-              <Sparkles size={14} className={item.ai.keep === false ? "text-ink-500" : "text-deal"} />
-              <span>
-                <strong>{item.manualClassification ? t("原 AI 说明：") : t("AI 判定：")}</strong>
-                {!item.manualClassification && (item.ai.keep === false
-                  ? t("低价值/水帖 · ")
-                  : item.kind === "news"
-                    ? t("重要新闻 · ")
-                    : item.kind === "info"
-                      ? t("行业资讯 · ")
-                      : item.kind === "opensource"
-                        ? t("开源项目 · ")
-                        : item.kind === "deal"
-                          ? t("特价好价 · ")
-                          : t("可领取福利 · "))}
-                {item.ai.reason}
-              </span>
-            </div>
-          )}
+          {item.ai?.reason && (() => {
+            const { badge, text } = splitReasonBadge(item.ai.reason);
+            return (
+              <div
+                className={
+                  "flex items-start gap-2 rounded-lg border px-3.5 py-2.5 text-[12px] " +
+                  (item.ai.keep === false
+                    ? "border-ink-200 bg-ink-100/70 text-ink-600"
+                    : "border-deal-border bg-deal-subtle/70 text-deal")
+                }
+              >
+                <Sparkles size={14} className={"mt-0.5 shrink-0 " + (item.ai.keep === false ? "text-ink-500" : "text-deal")} />
+                <span className="min-w-0 flex-1 [overflow-wrap:anywhere] break-words">
+                  <strong>{item.manualClassification ? t("原 AI 说明：") : t("AI 判定：")}</strong>
+                  {!item.manualClassification && (item.ai.keep === false
+                    ? t("低价值/水帖 · ")
+                    : item.kind === "news"
+                      ? t("重要新闻 · ")
+                      : item.kind === "info"
+                        ? t("行业资讯 · ")
+                        : item.kind === "opensource"
+                          ? t("开源项目 · ")
+                          : item.kind === "deal"
+                            ? t("特价好价 · ")
+                            : t("可领取福利 · "))}
+                  {badge && (
+                    <span className="mx-1 inline-flex items-center rounded border border-code-border bg-code-subtle px-1.5 py-0.5 text-[11px] font-semibold text-code">
+                      {badge}
+                    </span>
+                  )}
+                  {text}
+                </span>
+              </div>
+            );
+          })()}
 
           {codes.length > 0 && (
             <div className="rounded-lg border border-code-border bg-code-subtle/70 p-3.5">

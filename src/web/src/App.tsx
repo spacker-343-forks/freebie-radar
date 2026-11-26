@@ -64,6 +64,7 @@ import {
 import { AuthModal } from "./components/AuthModal.tsx";
 import { WelcomeModal } from "./components/WelcomeModal.tsx";
 import { RssModal } from "./components/RssModal.tsx";
+import type { DigestReport } from "../../shared/digest.ts";
 import { KIND_LABEL, KIND_ORDER, OBTAIN_HINT, OBTAIN_LABEL, SOURCE_GROUPS, categoriesForPreset, categoryLabelForPreset, channelExcluded, formatInterval, groupOfSource } from "./lib/sources.ts";
 
 // 管理区 / 次要 Tab 的大面板按需加载：首屏只发资源流真正要用的代码
@@ -550,6 +551,7 @@ export function App() {
   const digestDetail = useApi<{
     date: string;
     text: string;
+    report?: DigestReport | null;
     count: number;
     created_at: string;
     pushed_at: string | null;
