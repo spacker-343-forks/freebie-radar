@@ -37,7 +37,7 @@ export function DigestPanel({
 }) {
   const [running, setRunning] = useState(false);
   const [weeklyRunning, setWeeklyRunning] = useState(false);
-  const [textOpen, setTextOpen] = useState(false);
+  const [textOpen, setTextOpen] = useState(true);
   const active = pickedDate ?? digests[0]?.date ?? null;
 
   return (
@@ -132,7 +132,7 @@ export function DigestPanel({
               <pre
                 className={
                   "rounded-lg border border-ink-200 bg-surface-hover p-3.5 font-sans text-[13px] leading-relaxed whitespace-pre-wrap text-ink-800 " +
-                  (textOpen ? "" : "max-h-[168px] overflow-hidden")
+                  (textOpen ? "" : "max-h-[360px] overflow-hidden")
                 }
               >
                 {detail.data.text}

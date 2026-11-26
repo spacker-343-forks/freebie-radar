@@ -2,16 +2,24 @@ import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { Hono } from "hono";
 
-// 测试要可重复：不读本机 .env 的站点模式与管理令牌（否则本机配了 public/ADMIN_TOKEN 就会 401/403）
-process.env.DATABASE_PATH = ":memory:";
-process.env.SITE_MODE = "selfhost";
-process.env.ADMIN_TOKEN = "";
+// 测试要可重复：不读本机 .env 的站点模式、管理令牌与 AI/推送开关（否则本机配了 .env 会影响结果或发外网）
+Object.assign(process.env, {
+  DATABASE_PATH: ":memory:",
+  SITE_MODE: "selfhost",
+  ADMIN_TOKEN: "",
+  AI_BASE_URL: "",
+  AI_MODEL: "",
+  AI_API_KEY: "",
+  PUSH_CHANNEL: "none",
+  ENABLE_SCHEDULER: "false",
+});
 
 const { migrate, run, get, closeDb } = await import("../src/server/db.ts");
 const { ensureSources } = await import("../src/server/collectors/index.ts");
 const { registerApi } = await import("../src/server/routes.ts");
 const { buildHotReport, sourceQuality } = await import("../src/server/hot.ts");
-const { lastDigests, pickDaily, runWeekly, weekKey } = await import("../src/server/digest.ts");
+const { lastDigests, pickDaily, runDaily, runWeekly, weekKey } = await import("../src/server/digest.ts");
+const { saveAiSettings } = await import("../src/server/enrich/ai-settings.ts");
 
 const app = new Hono();
 
@@ -243,4 +251,106 @@ test("buildHotReport：最值得抢严格排除新闻/资讯/二手，对同事�
   const relRes = await app.request(`/api/items/${itemsJson.items[0]!.id}/related`);
   const relJson = (await relRes.json()) as { items: { id: number }[] };
   assert.equal(relJson.items.length, 2);
+});
+
+test("纯生财源默认推送态放行 info/opensource 与历史回溯补位，且 runDaily/runWeekly 调用 AI 主编生成深度内参并支持异常回退", async (t) => {
+  run("DELETE FROM items");
+  run("DELETE FROM digests");
+  run("DELETE FROM settings WHERE key IN ('ai', 'push')");
+
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const tenDaysAgo = new Date(now.getTime() - 10 * 86_400_000).toISOString();
+
+  // 插入近期生财 info 帖与 10 天前发布的回溯入库（first_seen_at 为今天）高质量开源/实战帖
+  const recentId = insertItem({
+    sourceId: "scys-highlights",
+    title: "Claude Code + MCP 自动化变现实战 SOP",
+    category: "ai",
+    kind: "info",
+    score: 82,
+    aiKeep: 1,
+    aiQuality: 5,
+    publishedAt: nowIso,
+  });
+  run("UPDATE items SET obtain = 'conditional', content = '完整 SOP 步骤与变现拆解', ai = ? WHERE id = ?", JSON.stringify({ keep: true, kind: "info", category: "ai", obtain: "conditional", quality: 5, reason: "[需编程] AI工作流SOP" }), recentId);
+
+  const backfillId = insertItem({
+    sourceId: "scys-projects",
+    title: "海外独立 SaaS 月入 5000 刀成本拆解",
+    category: "dev",
+    kind: "opensource",
+    score: 76,
+    aiKeep: 1,
+    aiQuality: 4,
+    publishedAt: tenDaysAgo,
+  });
+  run("UPDATE items SET obtain = 'paid', first_seen_at = ?, content = '含 GitHub 源码与投入产出比测算', ai = ? WHERE id = ?", nowIso, JSON.stringify({ keep: true, kind: "opensource", category: "dev", obtain: "paid", quality: 4, reason: "[需投流] SaaS开源拆解" }), backfillId);
+
+  // 未修改 push 设置（仍为默认 freebie/free）时，纯生财源环境下 pickDaily 应同时收录 info 与历史回溯补位帖
+  const dailyPool = pickDaily(now, 12);
+  assert.ok(dailyPool.some((it) => it.id === recentId));
+  assert.ok(dailyPool.some((it) => it.id === backfillId));
+
+  // 开启 AI 后，runDaily / runWeekly 应按 AI 返回的 selectedIds 排序并写入主编 briefing
+  saveAiSettings({ enabled: true, baseUrl: "https://digest-ai.invalid/v1", apiKey: "test-key", model: "gpt-6.1-terra:high" });
+  const sentRequests: Array<{ model: string; reasoning_effort?: string; hasTemp: boolean; system: string; candidateCount: number }> = [];
+  let failNext = false;
+
+  t.mock.method(globalThis, "fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as {
+      model: string;
+      reasoning_effort?: string;
+      temperature?: unknown;
+      messages: Array<{ role: string; content: string }>;
+    };
+    const candidates = JSON.parse(body.messages[1]!.content) as Array<{ id: number }>;
+    sentRequests.push({
+      model: body.model,
+      reasoning_effort: body.reasoning_effort,
+      hasTemp: "temperature" in body,
+      system: body.messages[0]!.content,
+      candidateCount: candidates.length,
+    });
+    if (failNext) {
+      return new Response("upstream error", { status: 500 });
+    }
+    const isWeekly = body.messages[0]!.content.includes("本周赛道风向");
+    const briefing = isWeekly
+      ? "📈 本周赛道风向\nAI 工作流加速。\n\n🏆 本周 Top 精选拆解\n1. SaaS 拆解 [需投流]\n\n💡 下周行动建议\n先跑通 MVP。"
+      : "🎯 今日核心风向\n关注 AI 自动化。\n\n🔥 必看实战拆解\n1. 成本拆解 [需投流]\n\n⚠️ 今日避坑提醒\n控制投流预算。";
+    // 故意把 backfillId 排在前面并混入一个无效 ID 999999 测试校验与重排
+    return new Response(
+      JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({ selectedIds: [999999, backfillId, recentId], briefing }) } }],
+      }),
+      { headers: { "content-type": "application/json" } },
+    );
+  });
+
+  try {
+    const dailyRes = await runDaily({ dryRun: false, date: now });
+    assert.equal(dailyRes.count, 2);
+    assert.ok(dailyRes.text.includes("🎯 今日核心风向"));
+    assert.equal(sentRequests[0]!.model, "gpt-6.1-terra");
+    assert.equal(sentRequests[0]!.reasoning_effort, "high");
+    assert.equal(sentRequests[0]!.hasTemp, false);
+    const savedDaily = get<{ item_ids: string }>("SELECT item_ids FROM digests WHERE date = ?", dailyRes.date)!;
+    assert.deepEqual(JSON.parse(savedDaily.item_ids), [backfillId, recentId]);
+
+    const weeklyRes = await runWeekly({ dryRun: false, date: now });
+    assert.equal(weeklyRes.count, 2);
+    assert.ok(weeklyRes.text.includes("📈 本周赛道风向"));
+    const savedWeekly = get<{ item_ids: string }>("SELECT item_ids FROM digests WHERE date = ?", weeklyRes.date)!;
+    assert.deepEqual(JSON.parse(savedWeekly.item_ids), [backfillId, recentId]);
+
+    // AI 异常时优雅回退默认 formatDigest / formatWeekly
+    failNext = true;
+    const fallbackDaily = await runDaily({ dryRun: true, date: now });
+    assert.ok(fallbackDaily.text.includes("资源雷达"));
+    const fallbackWeekly = await runWeekly({ dryRun: true, date: now });
+    assert.ok(fallbackWeekly.text.includes("本周精选"));
+  } finally {
+    saveAiSettings({ enabled: false, baseUrl: "", model: "", apiKey: "" });
+  }
 });

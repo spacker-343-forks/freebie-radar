@@ -1,6 +1,7 @@
 import { all, closeDb, migrate, run } from "../src/server/db.ts";
 import { SEEDS, ensureSources } from "../src/server/collectors/index.ts";
 import { getAiSettings, saveAiSettings, type AiSettings } from "../src/server/enrich/ai.ts";
+import { getPushSettings, savePushSettings } from "../src/server/push.ts";
 import { CATEGORY_DESC, CATEGORY_KEYS, CONTENT_KIND_KEYS, OBTAIN_KEYS } from "../src/shared/taxonomy.ts";
 
 const SCYS_SYSTEM_PROMPT = [
@@ -100,6 +101,19 @@ export function applyScysPreset() {
   };
   const ai = saveAiSettings(aiPatch);
 
+  // 推送与每日精选默认仅放行 freebie/free；若尚未自定义，则自动放行生财全有效形态且不限门槛
+  const curPush = getPushSettings();
+  const isDefaultKinds = curPush.kinds.length === 1 && curPush.kinds[0] === "freebie";
+  const isDefaultObtain = curPush.obtainModes.length === 1 && curPush.obtainModes[0] === "free";
+  let pushUpdated = false;
+  if (isDefaultKinds && isDefaultObtain) {
+    savePushSettings({
+      kinds: ["info", "opensource", "freebie", "deal"],
+      obtainModes: [],
+    });
+    pushUpdated = true;
+  }
+
   const now = new Date().toISOString();
   let rulesInserted = 0;
   for (const pattern of SCYS_BLOCK_RULES) {
@@ -132,6 +146,7 @@ export function applyScysPreset() {
     aiBatchSize: currentAi.batchSize,
     aiConcurrency: currentAi.concurrency,
     aiTimeoutSec: currentAi.timeoutSec,
+    pushUpdated,
   };
 }
 
@@ -149,6 +164,9 @@ if (isMain) {
     );
     if (!summary.aiConfigured || !summary.aiEnabled) {
       console.log("[scys-preset] 提示：请在界面「AI 引擎」或 .env 中填入 AI_API_KEY 并开启总开关后启用自动脱水。");
+    }
+    if (summary.pushUpdated) {
+      console.log("[scys-preset] 已将推送与每日精选筛选更新为适配生财全形态（info/opensource/freebie/deal，不限门槛）");
     }
     console.log(`[scys-preset] 全局屏蔽规则新增 ${summary.rulesInserted} 条（预设共 ${summary.totalBlockRules} 条，重复执行幂等）`);
   } finally {

@@ -1,9 +1,10 @@
 import { config } from "./config.ts";
 import { all, get, run } from "./db.ts";
 import { CATEGORY_LABEL, dedupeByTitle, KIND_LABEL, type ContentKind, type DedupeEntry } from "./enrich/index.ts";
+import { aiReady, aiSummaryExcerpt, getAiSettings, postChatCompletions } from "./enrich/ai-settings.ts";
 import { hasValueSignal, isNoiseTitle } from "./enrich/noise.ts";
 import { isBlocked, loadActiveBlockRules } from "./enrich/blocklist.ts";
-import { getPushSettings, passesPushFilters, sourceLabel } from "./push.ts";
+import { getPushSettings, passesPushFilters, sourceLabel, type PushSettings } from "./push.ts";
 import { sendTelegram } from "./telegram.ts";
 import { buildHotReport } from "./hot.ts";
 export { sendTelegram };
@@ -24,6 +25,8 @@ export type DigestItem = {
   codes?: string;
   urlKey?: string | null;
   ai_quality?: number | null;
+  summary?: string | null;
+  content?: string | null;
 };
 
 export type Digest = {
@@ -61,26 +64,35 @@ function recentDigestPushed(day: string): { ids: Set<number>; seeds: DedupeEntry
   return { ids, seeds };
 }
 
-export function pickDaily(date = new Date(), topN = config.dailyTopN): DigestItem[] {
-  const dayStart = new Date(date);
-  dayStart.setHours(0, 0, 0, 0);
-  const lookback = new Date(dayStart.getTime() - 2 * 86_400_000).toISOString();
-  const now = new Date().toISOString();
-
-  const rows = all<DigestItem>(
-    "SELECT id, source_id, title, url, url_key AS urlKey, category, kind, score, expires_at, published_at, price, is_free, obtain, ai, codes FROM items WHERE status = 'active' AND COALESCE(published_at, first_seen_at) >= ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY score DESC, COALESCE(published_at, first_seen_at) DESC LIMIT 400",
-    lookback,
-    now,
-  );
-
-  const pushed = recentDigestPushed(dayKey(date));
-  const rules = loadActiveBlockRules();
+/** 纯生财源且尚未自定义推送形态时，日报/周报自动放行全有效形态与非抽奖获取方式，防止新环境日报为空。 */
+function digestFilterSettings(): PushSettings {
   const settings = getPushSettings();
+  const isDefaultKinds = settings.kinds.length === 1 && settings.kinds[0] === "freebie";
+  if (!isDefaultKinds) return settings;
+  const enabledSources = all<{ id: string }>("SELECT id FROM sources WHERE enabled = 1");
+  if (!enabledSources.length || !enabledSources.every((s) => s.id.startsWith("scys-"))) {
+    return settings;
+  }
+  return {
+    ...settings,
+    kinds: ["info", "opensource", "freebie", "deal"],
+    obtainModes: ["free", "conditional", "paid", "promo", "trial"],
+  };
+}
+
+function filterDigestRows(
+  rows: DigestItem[],
+  pushedIds: Set<number>,
+  rules: ReturnType<typeof loadActiveBlockRules>,
+  settings: PushSettings,
+  ignoreMaxAge = false,
+): { kept: DigestItem[]; aiKeepMap: Map<number, boolean | null> } {
   const aiKeepMap = new Map<number, boolean | null>();
-  const fresh = rows.filter((r) => {
-    if (pushed.ids.has(r.id) || isBlocked(r, rules)) return false;
+  const effectiveSettings = ignoreMaxAge ? { ...settings, maxAgeHours: 0 } : settings;
+  const kept = rows.filter((r) => {
+    if (pushedIds.has(r.id) || isBlocked(r, rules)) return false;
     let codes: string[] = [];
-    try { codes = JSON.parse(r.codes ?? '[]') as string[]; } catch { codes = []; }
+    try { codes = JSON.parse(r.codes ?? "[]") as string[]; } catch { codes = []; }
     let aiKeep: boolean | null = null;
     if (r.ai) {
       try { aiKeep = (JSON.parse(r.ai) as { keep?: boolean }).keep ?? null; } catch { aiKeep = null; }
@@ -100,17 +112,67 @@ export function pickDaily(date = new Date(), topN = config.dailyTopN): DigestIte
       category: r.category,
       obtain: r.obtain ?? null,
       publishedAt: r.published_at,
-    }, settings);
+    }, effectiveSettings);
   });
+  return { kept, aiKeepMap };
+}
+
+function selectDailyPool(date = new Date(), limit = config.dailyTopN): DigestItem[] {
+  const lookback = new Date(date.getTime() - 3 * 86_400_000).toISOString();
+  const now = new Date().toISOString();
+
+  const rows = all<DigestItem>(
+    `SELECT id, source_id, title, url, url_key AS urlKey, category, kind, score, expires_at, published_at,
+            price, is_free, obtain, ai, codes, ai_quality, summary, content
+       FROM items
+      WHERE status = 'active'
+        AND COALESCE(published_at, first_seen_at) >= ?
+        AND (expires_at IS NULL OR expires_at > ?)
+      ORDER BY score DESC, COALESCE(published_at, first_seen_at) DESC
+      LIMIT 400`,
+    lookback,
+    now,
+  );
+
+  const pushed = recentDigestPushed(dayKey(date));
+  const rules = loadActiveBlockRules();
+  const settings = digestFilterSettings();
+  const { kept: fresh, aiKeepMap } = filterDigestRows(rows, pushed.ids, rules, settings, false);
 
   const hasSignal = (r: DigestItem) => aiKeepMap.get(r.id) === true || hasValueSignal(r.title, r.kind);
   const strictRaw = fresh.filter((r) => r.score >= MIN_DIGEST_SCORE && hasSignal(r) && !isNoiseTitle(r.title));
   const strict = dedupeByTitle(strictRaw, pushed.seeds);
-  if (strict.length >= Math.min(6, topN)) return strict.slice(0, topN);
+  let primary = strict.slice(0, limit);
+  if (primary.length < Math.min(6, limit)) {
+    const relaxedRaw = fresh.filter((r) => hasSignal(r) && !isNoiseTitle(r.title) && r.score >= MIN_DIGEST_SCORE - 10);
+    primary = dedupeByTitle(relaxedRaw, pushed.seeds).slice(0, limit);
+  }
+  if (primary.length >= limit) return primary;
 
-  const relaxedRaw = fresh.filter((r) => hasSignal(r) && !isNoiseTitle(r.title) && r.score >= MIN_DIGEST_SCORE - 10);
-  const relaxed = dedupeByTitle(relaxedRaw, pushed.seeds);
-  return relaxed.slice(0, topN);
+  // 近期发布不足时，从近 3 天新采集入库（含历史回溯）且 ai_keep=1 的高质量帖按 ai_quality/score 补齐
+  const primaryIds = new Set(primary.map((it) => it.id));
+  const backfillRows = all<DigestItem>(
+    `SELECT id, source_id, title, url, url_key AS urlKey, category, kind, score, expires_at, published_at,
+            price, is_free, obtain, ai, codes, ai_quality, summary, content
+       FROM items
+      WHERE status = 'active'
+        AND ai_keep = 1
+        AND COALESCE(kind, 'freebie') != 'noise'
+        AND first_seen_at >= ?
+        AND (expires_at IS NULL OR expires_at > ?)
+      ORDER BY COALESCE(ai_quality, 0) DESC, score DESC, first_seen_at DESC
+      LIMIT 200`,
+    lookback,
+    now,
+  ).filter((r) => !primaryIds.has(r.id));
+
+  const { kept: backfillKept } = filterDigestRows(backfillRows, pushed.ids, rules, settings, true);
+  const backfillClean = dedupeByTitle(backfillKept, [...pushed.seeds, ...primary]);
+  return [...primary, ...backfillClean].slice(0, limit);
+}
+
+export function pickDaily(date = new Date(), topN = config.dailyTopN): DigestItem[] {
+  return selectDailyPool(date, topN);
 }
 const MIN_DIGEST_SCORE = 55;
 
@@ -143,14 +205,147 @@ export function formatDigest(items: DigestItem[], date = new Date()): string {
 }
 
 
+function extractAiReason(rawAi: string | null | undefined): string {
+  if (!rawAi) return "";
+  try {
+    const parsed = JSON.parse(rawAi) as { reason?: unknown };
+    return typeof parsed.reason === "string" ? parsed.reason.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+function buildEditorSystemPrompt(mode: "daily" | "weekly", topN: number): string {
+  const sections =
+    mode === "daily"
+      ? [
+          "1. `🎯 今日核心风向`（总结今日最值得关注的 1-2 个生财机会与共同规律）",
+          "2. `🔥 必看实战拆解`（按入选顺序逐条拆解，每条 2~3 句讲清核心打法、关键数据与 `[底牌门槛]`，并附上原始链接）",
+          "3. `⚠️ 今日避坑提醒`（提炼门槛风险、隐性成本或需要警惕的伪需求）",
+        ]
+      : [
+          "1. `📈 本周赛道风向`（提炼本周高密度赛道趋势与风向变化）",
+          "2. `🏆 本周 Top 精选拆解`（逐条拆解最值得深挖的项目/SOP/开源工具，写清核心打法、真实数据、`[底牌门槛]` 与原始链接）",
+          "3. `💡 下周行动建议`（给出不同底牌读者的可执行下一步）",
+        ];
+
+  return [
+    "你是「生财有术私人商业情报主编」。",
+    `请从候选条目中优中选优，挑选赛道互补、实操性最强的最多 ${topN} 条（不足 ${topN} 条则全选），并撰写排版清爽、适合手机阅读的中文深度内参。`,
+    "",
+    "必须严格输出单个 JSON 对象（不要输出 Markdown 代码围栏或多余解释）：",
+    '{"selectedIds": [123, 456], "briefing": "..."}',
+    "- `selectedIds` 必须是候选列表中的整数 `id` 数组（去重且按推荐优先级排序）。",
+    "- `briefing` 必须使用分段纯文本/轻量 emoji 排版，包含以下三个固定板块：",
+    ...sections,
+    "- 严禁编造候选内容未提及的收益数字或链接；每条拆解务必带上 `[底牌门槛]` 提示。",
+  ].join("\n");
+}
+
+async function synthesizeDigestWithAi(
+  candidates: DigestItem[],
+  mode: "daily" | "weekly",
+  date: Date,
+  topN: number,
+  options: { fetchImpl?: typeof fetch; log?: (m: string) => void } = {},
+): Promise<{ items: DigestItem[]; text: string }> {
+  const fallbackItems = candidates.slice(0, topN);
+  const fallbackText = mode === "daily" ? formatDigest(fallbackItems, date) : formatWeekly(fallbackItems, date);
+  const s = getAiSettings();
+  if (!candidates.length || !aiReady(s)) {
+    return { items: fallbackItems, text: fallbackText };
+  }
+
+  const candidateById = new Map(candidates.map((it) => [it.id, it]));
+  const payload = candidates.map((it) => ({
+    id: it.id,
+    title: it.title.slice(0, 140),
+    url: it.url,
+    kind: it.kind ?? "info",
+    category: it.category ?? "other",
+    obtain: it.obtain ?? "free",
+    quality: it.ai_quality ?? null,
+    aiReason: extractAiReason(it.ai),
+    summaryExcerpt: aiSummaryExcerpt({ summary: it.summary, content: it.content }),
+  }));
+
+  const ac = new AbortController();
+  const timeoutMs = Math.max(s.timeoutSec, 90) * 1000;
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const { res } = await postChatCompletions({
+      baseUrl: s.baseUrl,
+      apiKey: s.apiKey,
+      model: s.model,
+      messages: [
+        { role: "system", content: buildEditorSystemPrompt(mode, topN) },
+        { role: "user", content: JSON.stringify(payload) },
+      ],
+      signal: ac.signal,
+      fetchImpl: options.fetchImpl,
+    });
+    if (!res.ok) {
+      throw new Error(`AI 主编 HTTP ${res.status} ${(await res.text()).slice(0, 120)}`);
+    }
+    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    const content = data.choices?.[0]?.message?.content ?? "";
+    const jsonText = /\{[\s\S]*\}/.exec(content)?.[0];
+    if (!jsonText) throw new Error("AI 主编未返回 JSON 对象");
+    const parsed = JSON.parse(jsonText) as { selectedIds?: unknown; briefing?: unknown };
+    if (typeof parsed.briefing !== "string" || !parsed.briefing.trim()) {
+      throw new Error("AI 主编 briefing 为空");
+    }
+
+    const pickedIds: number[] = [];
+    const seen = new Set<number>();
+    if (Array.isArray(parsed.selectedIds)) {
+      for (const rawId of parsed.selectedIds) {
+        if (typeof rawId !== "number" || !Number.isInteger(rawId)) continue;
+        if (!candidateById.has(rawId) || seen.has(rawId)) continue;
+        seen.add(rawId);
+        pickedIds.push(rawId);
+        if (pickedIds.length >= topN) break;
+      }
+    }
+    // AI 返回不足 topN 时按候选池原高分顺序补齐
+    for (const c of candidates) {
+      if (pickedIds.length >= Math.min(topN, candidates.length)) break;
+      if (seen.has(c.id)) continue;
+      seen.add(c.id);
+      pickedIds.push(c.id);
+    }
+
+    const selectedItems = pickedIds.map((id) => candidateById.get(id)!).filter(Boolean);
+    return {
+      items: selectedItems,
+      text: parsed.briefing.trim(),
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    (options.log ?? console.warn)(`[${mode}] AI 主编合成失败，优雅回退默认格式: ${msg}`);
+    return { items: fallbackItems, text: fallbackText };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export type DailyResult = { date: string; count: number; text: string; pushed: boolean; skippedReason?: string };
 
-export async function runDaily(options: { dryRun?: boolean; date?: Date; log?: (m: string) => void } = {}): Promise<DailyResult> {
+export async function runDaily(options: {
+  dryRun?: boolean;
+  date?: Date;
+  log?: (m: string) => void;
+  fetchImpl?: typeof fetch;
+} = {}): Promise<DailyResult> {
   const log = options.log ?? ((m: string) => console.log(m));
   const date = options.date ?? new Date();
   const key = dayKey(date);
-  const items = pickDaily(date);
-  const text = formatDigest(items, date);
+  const topN = config.dailyTopN;
+  const candidates = selectDailyPool(date, Math.max(topN * 2, 20));
+  const { items, text } = await synthesizeDigestWithAi(candidates, "daily", date, topN, {
+    fetchImpl: options.fetchImpl,
+    log,
+  });
 
   if (options.dryRun) {
     log("[daily] dry-run " + key + " items=" + items.length);
@@ -224,13 +419,13 @@ export function weekKey(date = new Date()): string {
   return dayKey(start) + "~" + dayKey(end).slice(5);
 }
 
-export function pickWeekly(date = new Date(), topN = 20): DigestItem[] {
+function selectWeeklyPool(date = new Date(), limit = 20): DigestItem[] {
   const end = new Date(date);
   const start = new Date(end.getTime() - WEEK_DAYS * 86_400_000);
   const now = new Date().toISOString();
   const rows = all<DigestItem>(
     `SELECT id, source_id, title, url, url_key AS urlKey, category, kind, score, expires_at, published_at,
-            price, is_free, obtain, ai, codes, ai_quality
+            price, is_free, obtain, ai, codes, ai_quality, summary, content
        FROM items
       WHERE status = 'active'
         AND ai_keep = 1
@@ -243,37 +438,35 @@ export function pickWeekly(date = new Date(), topN = 20): DigestItem[] {
     now,
   );
   const rules = loadActiveBlockRules();
-  const settings = getPushSettings();
-  const usable = rows.filter((r) => {
-    if (isBlocked(r, rules)) return false;
-    if (settings.applyToDigest) {
-      let codes: string[] = [];
-      try {
-        codes = JSON.parse(r.codes ?? "[]") as string[];
-      } catch {
-        codes = [];
-      }
-      return passesPushFilters(
-        {
-          sourceId: r.source_id,
-          title: r.title,
-          score: r.score,
-          codes,
-          price: r.price ?? null,
-          isFree: r.is_free === 1,
-          aiKeep: true,
-          kind: r.kind ?? null,
-          category: r.category,
-          obtain: r.obtain ?? null,
-          publishedAt: r.published_at,
-        },
-        settings,
-      );
-    }
-    return true;
-  });
+  const settings = digestFilterSettings();
+  const emptyPushed = new Set<number>();
+  const { kept: usable } = filterDigestRows(rows, emptyPushed, rules, settings, false);
   // 同一福利被十几个源报道时只留一条，避免周报被喜加一刷屏
-  return dedupeByTitle(usable, []).slice(0, topN);
+  const primary = dedupeByTitle(usable, []).slice(0, limit);
+  if (primary.length >= limit) return primary;
+
+  const primaryIds = new Set(primary.map((it) => it.id));
+  const backfillRows = all<DigestItem>(
+    `SELECT id, source_id, title, url, url_key AS urlKey, category, kind, score, expires_at, published_at,
+            price, is_free, obtain, ai, codes, ai_quality, summary, content
+       FROM items
+      WHERE status = 'active'
+        AND ai_keep = 1
+        AND COALESCE(kind, 'freebie') != 'noise'
+        AND first_seen_at >= ?
+        AND (expires_at IS NULL OR expires_at > ?)
+      ORDER BY COALESCE(ai_quality, 0) DESC, score DESC, first_seen_at DESC
+      LIMIT 300`,
+    start.toISOString(),
+    now,
+  ).filter((r) => !primaryIds.has(r.id));
+  const { kept: backfillKept } = filterDigestRows(backfillRows, emptyPushed, rules, settings, true);
+  const backfillClean = dedupeByTitle(backfillKept, primary);
+  return [...primary, ...backfillClean].slice(0, limit);
+}
+
+export function pickWeekly(date = new Date(), topN = 20): DigestItem[] {
+  return selectWeeklyPool(date, topN);
 }
 
 export function formatWeekly(items: DigestItem[], date = new Date()): string {
@@ -316,12 +509,21 @@ export function formatWeekly(items: DigestItem[], date = new Date()): string {
 
 export type WeeklyResult = { date: string; count: number; text: string; pushed: boolean; skippedReason?: string };
 
-export async function runWeekly(options: { dryRun?: boolean; date?: Date; log?: (m: string) => void } = {}): Promise<WeeklyResult> {
+export async function runWeekly(options: {
+  dryRun?: boolean;
+  date?: Date;
+  log?: (m: string) => void;
+  fetchImpl?: typeof fetch;
+} = {}): Promise<WeeklyResult> {
   const log = options.log ?? ((m: string) => console.log(m));
   const date = options.date ?? new Date();
   const key = weekKey(date);
-  const items = pickWeekly(date);
-  const text = formatWeekly(items, date);
+  const topN = 20;
+  const candidates = selectWeeklyPool(date, Math.max(topN * 2, 20));
+  const { items, text } = await synthesizeDigestWithAi(candidates, "weekly", date, topN, {
+    fetchImpl: options.fetchImpl,
+    log,
+  });
 
   if (options.dryRun) {
     log("[weekly] dry-run " + key + " items=" + items.length);
