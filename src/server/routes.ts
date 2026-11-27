@@ -49,6 +49,26 @@ import {
   listTracks,
   synthesizeAllTracks,
 } from "./tracks.ts";
+import {
+  backfillScysDailyReports,
+  ensureScysOfficialReportTable,
+  getScysOfficialReport,
+  listScysOfficialReports,
+  syncScysDailyReport,
+} from "./scys-official-report.ts";
+import { getManualBookDetail, getManualChapter, listManualBooks } from "./manuals.ts";
+import {
+  distillChatGroupInsights,
+  ensureChatRadarTables,
+  getChatGroupsOverview,
+  getChatMessageContext,
+  listChatDigests,
+  searchChatMessages,
+  setChatGroupEnabled,
+  syncChatGroupMessages,
+  syncChatGroupsCatalog,
+} from "./chat-radar.ts";
+import type { ChatGroupTier } from "../shared/chat-radar.ts";
 import { isPublicSite, siteMode } from "./config.ts";
 import {
   addCustomRssSource,
@@ -696,9 +716,10 @@ const PUBLIC_GET_EXACT = new Set([
   "/api/rss",
   "/api/upstream-watch",
   "/api/tracks",
+  "/api/scys/daily-reports",
 ]);
 
-const PUBLIC_GET_PREFIX = ["/api/items/", "/api/digests/", "/api/tracks/"];
+const PUBLIC_GET_PREFIX = ["/api/items/", "/api/digests/", "/api/tracks/", "/api/scys/daily-reports/"];
 
 let warnedNoAdminToken = false;
 let warnedAdminLocked = false;
@@ -706,6 +727,7 @@ let warnedAdminLocked = false;
 export function registerApi(app: Hono) {
   ensureDossierTable();
   ensureTracksTable();
+  ensureScysOfficialReportTable();
   registerSecurity(app);
   /**
    * 鉴权分层（顺序即优先级）：
@@ -963,6 +985,7 @@ const fetchLimit = Math.min(Math.max(offset + limit * 3, 240), 600);
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
     }
   });
+
   app.post("/api/items/:id/sync-comments", async (c) => {
     const itemId = Number(c.req.param("id"));
     if (!Number.isSafeInteger(itemId) || itemId < 1) return c.json({ error: "条目 ID 无效" }, 400);
@@ -1751,6 +1774,93 @@ const fetchLimit = Math.min(Math.max(offset + limit * 3, 240), 600);
         id.siteMode === "public" ? (id.user?.id ?? null) : null,
       ),
     });
+  });
+
+  app.get("/api/scys/daily-reports", (c) => {
+    const rawLimit = Number(c.req.query("limit") ?? 30);
+    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.round(rawLimit), 1), 200) : 30;
+    return c.json({ reports: listScysOfficialReports(limit) });
+  });
+
+  app.get("/api/scys/daily-reports/:date", (c) => {
+    const date = c.req.param("date").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return c.json({ error: "日报日期格式无效，应为 YYYY-MM-DD" }, 400);
+    }
+    const report = getScysOfficialReport(date);
+    if (!report) return c.json({ error: "not found" }, 404);
+    return c.json({ report });
+  });
+
+  app.post("/api/scys/daily-reports/sync", async (c) => {
+    const rawText = await c.req.text();
+    let body: Record<string, unknown> = {};
+    if (rawText.trim()) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(rawText);
+      } catch {
+        return c.json({ error: "请求体必须是合法 JSON 对象" }, 400);
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return c.json({ error: "请求体必须是 JSON 对象" }, 400);
+      }
+      body = parsed as Record<string, unknown>;
+    }
+
+    if (body.force !== undefined && typeof body.force !== "boolean") {
+      return c.json({ error: "force 必须是布尔值" }, 400);
+    }
+    const force = body.force === true;
+
+    let edition: "DAILY" | "WEEKEND" | undefined;
+    if (body.edition !== undefined) {
+      if (body.edition !== "DAILY" && body.edition !== "WEEKEND") {
+        return c.json({ error: "edition 只能是 DAILY 或 WEEKEND" }, 400);
+      }
+      edition = body.edition;
+    }
+
+    let reportDate: string | undefined;
+    if (body.reportDate !== undefined) {
+      if (typeof body.reportDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(body.reportDate.trim())) {
+        return c.json({ error: "reportDate 格式无效，应为 YYYY-MM-DD" }, 400);
+      }
+      reportDate = body.reportDate.trim();
+    }
+
+    let days: number | undefined;
+    if (body.days !== undefined) {
+      if (typeof body.days !== "number" || !Number.isInteger(body.days) || body.days < 0 || body.days > 29) {
+        return c.json({ error: "days 必须是 0~29 的整数" }, 400);
+      }
+      days = body.days;
+    }
+
+    if (reportDate && days !== undefined) {
+      return c.json({ error: "reportDate 与 days 不能同时指定" }, 400);
+    }
+
+    try {
+      if (days !== undefined) {
+        const summary = await backfillScysDailyReports({ days, force });
+        return c.json({
+          ok: true,
+          synced: summary.synced,
+          latestDate: summary.latestDate,
+          reports: listScysOfficialReports(30),
+        });
+      }
+      const detail = await syncScysDailyReport({ reportDate, edition, force });
+      return c.json({
+        ok: true,
+        synced: 1,
+        latestDate: detail.reportDate,
+        reports: listScysOfficialReports(30),
+      });
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
   });
 
   /* ================================================================== *

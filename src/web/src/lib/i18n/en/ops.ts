@@ -220,4 +220,9 @@ export const EN_OPS: Record<string, string> = {
   "变更对比": "Diff",
   "上游检测失败": "Upstream check failed",
   "已完成上游源头 AI 巡检": "Upstream AI check complete",
+
+  /* ---------------- 生财新增内置源 ---------------- */
+  "生财有术 · 大佬公众号/推文/群聊精华": "SCYS · Top Creators, X & Group Gems",
+  "生财有术 · 收录文库与群聊精华": "SCYS · Curated Library & Group Gems",
+  "生财有术 · 官方 AI 情报流": "SCYS · Official AI Intel Feed",
 };

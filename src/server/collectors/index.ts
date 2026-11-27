@@ -38,6 +38,8 @@ import { ngaCollector } from "./nga.ts";
 import { biliCollector } from "./bili.ts";
 import { weiboCollector } from "./weibo.ts";
 import { scysCollector } from "./scys.ts";
+import { scysTrustedCollector } from "./scys-trusted.ts";
+import { scysAiFeedCollector } from "./scys-ai-feed.ts";
 import type { Collector, RawItem, SourceSeed } from "./types.ts";
 import { getSourceHints, applyManualClassification } from "../source-settings.ts";
 import { categoryForSource } from "../../shared/source-classification.ts";
@@ -47,7 +49,7 @@ export { getSourceHints } from "../source-settings.ts";
 export const COLLECTORS: Collector[] = [
   mockCollector, linuxdoCollector, v2exCollector, githubCollector, rssCollector, telegramCollector,
   gamerpowerCollector, epicCollector, gogCollector, steamCollector, cheapsharkCollector, bskyCollector, openrouterCollector, cctvCollector, cookieIngestCollector,
-  ngaCollector, biliCollector, weiboCollector, scysCollector,
+  ngaCollector, biliCollector, weiboCollector, scysCollector, scysTrustedCollector, scysAiFeedCollector,
 ];
 const BY_KIND = new Map(COLLECTORS.map((c) => [c.kind, c]));
 
@@ -251,6 +253,8 @@ export const SEEDS: SourceSeed[] = [
   { id: "scys-highlights", name: "生财有术 · 精华与风向标", kind: "scys", enabled: true, intervalSec: 1800, config: { mode: "highlights", pageSize: 15, fetchDetail: true, maxDetailPerRun: 15 } },
   { id: "scys-projects", name: "生财有术 · 项目库案例", kind: "scys", enabled: true, intervalSec: 3600, config: { mode: "projects", pageSize: 15, fetchDetail: true, maxDetailPerRun: 15 } },
   { id: "scys-latest", name: "生财有术 · 最新帖子", kind: "scys", enabled: true, intervalSec: 1800, config: { mode: "latest", pageSize: 15, fetchDetail: true, maxDetailPerRun: 15 } },
+  { id: "scys-trusted", name: "生财有术 · 大佬公众号/推文/群聊精华", kind: "scys-trusted", enabled: true, intervalSec: 3600, config: { pageSize: 15, fetchDetail: true, maxDetailPerRun: 12 } },
+  { id: "scys-ai-feed", name: "生财有术 · 官方 AI 情报流", kind: "scys-ai-feed", enabled: true, intervalSec: 3600, config: { limit: 30 } },
   { id: "scys-manuals", name: "生财有术 · 航海实战手册", kind: "scys", enabled: false, intervalSec: 7200, config: { mode: "manuals", pageSize: 12, fetchDetail: true, maxDetailPerRun: 12 } },
 ];
 

@@ -21,6 +21,7 @@ import { pushUserDaily, startUserPushScheduler } from "./user-push.ts";
 import { purgeExpiredSessions } from "./auth.ts";
 import { getBuildInfo } from "./updater.ts";
 import { checkUpstreamUpdates, startUpstreamWatchScheduler } from "./upstream-watch.ts";
+import { syncScysDailyReport } from "./scys-official-report.ts";
 import { registerSecurity } from "./security.ts";
 import { reconcileFixedSourceCategories } from "./source-settings.ts";
 
@@ -122,6 +123,10 @@ if (config.enableScheduler) {
           console.error("[user-push] 个人日报失败:", err instanceof Error ? err.message : err);
         });
       }
+      // 顺带同步最新一期生财官方内参日报（非阻塞容错）
+      void syncScysDailyReport().catch((err) => {
+        console.error("[scys-report] 日报联动同步失败:", err instanceof Error ? err.message : err);
+      });
       // 顺带触发一次非强制上游重大更新巡检
       void checkUpstreamUpdates({ force: false }).catch((err) => {
         console.error("[upstream-watch] 日报联动巡检失败:", err instanceof Error ? err.message : err);
