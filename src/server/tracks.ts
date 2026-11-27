@@ -251,13 +251,13 @@ export async function synthesizeAllTracks(
     for (let i = 0; i < rawTracks.length && seeds.length < maxTracks; i += 1) {
       const t = rawTracks[i] as Record<string, unknown> | null;
       if (!t || typeof t !== "object") continue;
-      const title = typeof t.title === "string" ? t.title.trim().slice(0, 80) : "";
+      const title = typeof t.title === "string" ? t.title.trim().slice(0, 160) : "";
       if (!title) continue;
       let slug = sanitizeSlug(typeof t.slug === "string" ? t.slug : "", i);
       if (seenSlugs.has(slug)) slug = `${slug}-${i + 1}`;
       seenSlugs.add(slug);
       const emoji = typeof t.emoji === "string" && t.emoji.trim() ? t.emoji.trim().slice(0, 12) : "🧭";
-      const tagline = typeof t.tagline === "string" && t.tagline.trim() ? t.tagline.trim().slice(0, 160) : title;
+      const tagline = typeof t.tagline === "string" && t.tagline.trim() ? t.tagline.trim().slice(0, 400) : title;
       const keywords = Array.isArray(t.keywords)
         ? t.keywords.filter((k): k is string => typeof k === "string" && k.trim().length > 0).map((k) => k.trim())
         : [];
@@ -318,8 +318,8 @@ export async function synthesizeAllTracks(
                 {
                   name: "主流变现流派名称",
                   mechanism: "核心获客渠道 + 交付形式 + 变现路径（2~3句）",
-                  roiRange: "月入/客单ROI区间（引用素材或谨慎估算）",
-                  targetPlayer: "适合底牌（如：有代码能力/零基础内容党）",
+                  roiRange: "真实单价/客单/月营收测算区间（1~2句完整表述，约40~100字，句意务必完整收尾）",
+                  targetPlayer: "适合人群底牌（1~2句完整表述，如技术能力/时间投入/资源门槛）",
                 },
               ],
               commonPitfalls: ["跨帖高频踩坑死法1", "死法2"],
@@ -327,6 +327,7 @@ export async function synthesizeAllTracks(
               topItemIds: [topItems[0]?.id ?? 1],
             }),
             "- `playbooks` 提取 2~4 种差异化变现流派；",
+            "- `roiRange` 与 `targetPlayer` 控制在 1~2 句精炼完整表述内（约 40~100 字），句意必须完整收尾，禁止半句截断；",
             "- `topItemIds` 必须从提供素材的 `id` 中精选 5~10 篇最具代表性的帖子 ID。",
           ].join("\n");
 

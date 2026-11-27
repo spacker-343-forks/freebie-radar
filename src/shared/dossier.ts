@@ -31,13 +31,13 @@ export function validateItemDossier(
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
 
-  const verdict = cleanStr(r.verdict, 300);
-  const startupCost = cleanStr(r.startupCost, 120);
-  const timeToFirstDollar = cleanStr(r.timeToFirstDollar, 80);
-  const formula = cleanStr(r.formula, 240);
-  const sop = cleanStrList(r.sop, 8, 360);
-  const pitfalls = cleanStrList(r.pitfalls, 6, 260);
-  const soloMvp = cleanStr(r.soloMvp, 400);
+  const verdict = cleanStr(r.verdict, 1000);
+  const startupCost = cleanStr(r.startupCost, 500);
+  const timeToFirstDollar = cleanStr(r.timeToFirstDollar, 300);
+  const formula = cleanStr(r.formula, 1000);
+  const sop = cleanStrList(r.sop, 10, 1200);
+  const pitfalls = cleanStrList(r.pitfalls, 8, 1000);
+  const soloMvp = cleanStr(r.soloMvp, 1800);
 
   if (!verdict || !startupCost || !timeToFirstDollar || !formula || !soloMvp) return null;
   if (!sop.length || !pitfalls.length) return null;

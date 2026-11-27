@@ -53,10 +53,10 @@ export function validateTrackWhitepaper(
   const r = raw as Record<string, unknown>;
 
   const slug = cleanStr(r.slug, 64) || cleanStr(fallbackMeta?.slug, 64);
-  const title = cleanStr(r.title, 80) || cleanStr(fallbackMeta?.title, 80);
+  const title = cleanStr(r.title, 160) || cleanStr(fallbackMeta?.title, 160);
   const emoji = cleanStr(r.emoji, 12) || cleanStr(fallbackMeta?.emoji, 12) || "🧭";
-  const tagline = cleanStr(r.tagline, 160) || cleanStr(fallbackMeta?.tagline, 160);
-  const overview = cleanStr(r.overview, 1000);
+  const tagline = cleanStr(r.tagline, 400) || cleanStr(fallbackMeta?.tagline, 400);
+  const overview = cleanStr(r.overview, 4000);
   if (!slug || !title || !overview) return null;
 
   const playbooksRaw = Array.isArray(r.playbooks) ? r.playbooks : [];
@@ -64,10 +64,10 @@ export function validateTrackWhitepaper(
   for (const pb of playbooksRaw) {
     if (!pb || typeof pb !== "object" || Array.isArray(pb)) continue;
     const p = pb as Record<string, unknown>;
-    const name = cleanStr(p.name, 80);
-    const mechanism = cleanStr(p.mechanism, 360);
-    const roiRange = cleanStr(p.roiRange, 80) || "待测算";
-    const targetPlayer = cleanStr(p.targetPlayer, 100) || "个人/小团队";
+    const name = cleanStr(p.name, 160);
+    const mechanism = cleanStr(p.mechanism, 1500);
+    const roiRange = cleanStr(p.roiRange, 800) || "待测算";
+    const targetPlayer = cleanStr(p.targetPlayer, 800) || "个人/小团队";
     if (name && mechanism) {
       playbooks.push({ name, mechanism, roiRange, targetPlayer });
     }
@@ -75,8 +75,8 @@ export function validateTrackWhitepaper(
   }
   if (!playbooks.length) return null;
 
-  const commonPitfalls = cleanStrList(r.commonPitfalls, 6, 240);
-  const actionChecklist = cleanStrList(r.actionChecklist, 8, 240);
+  const commonPitfalls = cleanStrList(r.commonPitfalls, 8, 1000);
+  const actionChecklist = cleanStrList(r.actionChecklist, 10, 1000);
   const topItemIds = Array.isArray(r.topItemIds)
     ? [...new Set(r.topItemIds.filter((id): id is number => typeof id === "number" && Number.isInteger(id) && id > 0))]
     : fallbackMeta?.topItemIds ?? [];

@@ -40,6 +40,8 @@ const {
   listTracks,
   synthesizeAllTracks,
 } = await import("../src/server/tracks.ts");
+const { validateItemDossier } = await import("../src/shared/dossier.ts");
+const { validateTrackWhitepaper } = await import("../src/shared/tracks.ts");
 
 const app = new Hono();
 
@@ -311,4 +313,51 @@ test("模块二赛道图谱：synthesizeAllTracks 聚类+白皮书合成及 GET 
     apiDetailJson.items.map((x) => x.id),
     [201, 202],
   );
+});
+
+test("字段截断保护：超过 150 字的 roiRange、targetPlayer 与 formula 不被腰斩", () => {
+  const longRoi =
+    "客单价 199~499 元（低价体验包引流转 2999 元年度陪跑），按照单日自然流量 800 曝光、2.5% 加微率、15% 成交率测算，单号月毛利约 12,000~28,000 元；若叠加矩阵分发并剔除原帖未去重的复购样本，同时扣除云主机、第三方 API 调用与人工答疑损耗后，稳定单人月净营收仍可维持在 8,000~18,000 元区间且边际复制成本极低，整体投入产出比显著高于传统接单模式。";
+  const longTarget =
+    "适合具备基础提示词调优与飞书多维表格搭建能力、每周可投入 10~15 小时做内容拆解与私域交付的独立开发者或自由职业者；同时也适合已经跑通单一垂直行业案例、希望将定制交付沉淀为标准化 SaaS 或工作流模板并实现多客户复用的小型工作室团队，尤其适用于长期深耕 B 端垂类行业知识库与自动化工具链的实战派选手，不建议完全无时间做售后答疑的纯新手重资产投流。";
+  const longFormula =
+    "月净利 = (客单价 299 元 × 自然流量转化率 3.2% × 月精准访客 4500 人) + (高客单定制 2800 元 × 月成交 4 单) − 工具订阅与大模型 API 成本 350 元 − 隐性售后交付与需求沟通工时折算 1200 元 − 渠道引流试错与退款备用金 500 元 − 税务及支付通道手续费 240 元，综合毛利率稳定维持在 75% 以上且回本周期极短。";
+
+  assert.ok(longRoi.length > 150);
+  assert.ok(longTarget.length > 150);
+  assert.ok(longFormula.length > 150);
+
+  const track = validateTrackWhitepaper({
+    slug: "long-field-test",
+    title: "长文本字段完整度测试赛道",
+    emoji: "🧭",
+    tagline: "验证超过 150 字字段不被过短截断",
+    overview: "超过 1000 字也不被过早截断的赛道概览。".repeat(30),
+    playbooks: [
+      {
+        name: "长文本流派测试",
+        mechanism: "完整的获客、转化、交付链路描述。",
+        roiRange: longRoi,
+        targetPlayer: longTarget,
+      },
+    ],
+    commonPitfalls: ["常见踩坑说明"],
+    actionChecklist: ["第1天执行动作"],
+    topItemIds: [1],
+  });
+  assert.ok(track);
+  assert.equal(track.playbooks[0]?.roiRange, longRoi);
+  assert.equal(track.playbooks[0]?.targetPlayer, longTarget);
+
+  const dossier = validateItemDossier({
+    verdict: "具备明确现金流闭环的轻量 AI 交付项目",
+    startupCost: "初始工具与域名投入不超过 300 元，主要成本在于每周 8 小时的模板打磨与客户案例沉淀。",
+    timeToFirstDollar: "3~7 天内可通过垂直社群发出 10 份体验包完成首单付费闭环验证。",
+    formula: longFormula,
+    sop: ["第1步：整理垂直场景高频需求模板"],
+    pitfalls: ["避免在未收款前做深度定制开发"],
+    soloMvp: "先做单页演示 + 固定价体验包完成前 3 个种子用户交付",
+  });
+  assert.ok(dossier);
+  assert.equal(dossier.formula, longFormula);
 });

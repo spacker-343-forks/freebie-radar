@@ -521,7 +521,7 @@ async function evaluateUpstreamWithAi(
     const highlights = Array.isArray(parsed.highlights)
       ? parsed.highlights
           .filter((x): x is string => typeof x === "string" && x.trim().length > 0)
-          .map((x) => x.trim().slice(0, 140))
+          .map((x) => x.trim().slice(0, 500))
           .slice(0, 3)
       : [];
 
