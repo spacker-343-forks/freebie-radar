@@ -13,7 +13,7 @@ installAuthFetch();
 initTheme();
 // 语言相关的文档级副作用只在启动时做一次（切换语言会整页重载）
 applyDocumentLang();
-document.title = t("资源雷达 · Resource Radar");
+document.title = t("生财雷达 · 商业情报与实战知识库");
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

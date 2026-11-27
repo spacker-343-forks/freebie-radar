@@ -97,12 +97,12 @@ export function AuthModal({
   };
 
   return (
-    <Dialog label={inviteMode ? t("输入邀请码完成注册") : t("登录资源雷达")} onClose={onClose} className="max-w-[420px]">
+    <Dialog label={inviteMode ? t("输入邀请码完成注册") : t("登录生财雷达")} onClose={onClose} className="max-w-[420px]">
       <div className="sheet-enter panel w-full max-w-[420px] overflow-hidden">
         <div className="flex items-start justify-between gap-3 border-b border-ink-100 px-5 py-3.5">
           <div>
             <h2 className="text-[17px] font-semibold text-ink-950">
-              {inviteMode ? t("输入邀请码完成注册") : t("登录资源雷达")}
+              {inviteMode ? t("输入邀请码完成注册") : t("登录生财雷达")}
             </h2>
             <p className="mt-0.5 text-[12px] text-ink-500">
               {inviteMode

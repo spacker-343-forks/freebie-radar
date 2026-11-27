@@ -186,19 +186,18 @@ function Toast({ message }: { message: string | null }) {
 type Preset = { key: string; label: string; icon: typeof Sparkles };
 
 const PRIMARY_CHANNELS: Preset[] = [
-  { key: "info", label: t("行业资讯"), icon: TrendingUp },
-  { key: "opensource", label: t("开源项目"), icon: Code },
-  { key: "verified", label: t("真福利"), icon: Sparkles },
-  { key: "deal", label: t("黑五/好价"), icon: Flame },
-  { key: "news", label: t("重要新闻"), icon: Newspaper },
-  { key: "offline", label: t("实物福利"), icon: MapPin },
-  { key: "pan", label: t("网盘/网课"), icon: FolderOpen },
+  { key: "picks", label: t("精选干货"), icon: Flame },
+  { key: "dossiers", label: t("立项拆解"), icon: Zap },
+  { key: "manuals", label: t("航海手册"), icon: BookOpen },
+  { key: "projects", label: t("项目案例"), icon: Compass },
+  { key: "tools", label: t("开源与工具"), icon: Code },
+  { key: "perks", label: t("福利与资料"), icon: Sparkles },
 ];
 
+const NON_PRICE_PRESETS = new Set(["news", "info", "opensource", "picks", "dossiers", "manuals", "projects", "tools"]);
 
 const SECONDARY_VIEWS: Preset[] = [
-  { key: "codes", label: t("含兑换码"), icon: Zap },
-  { key: "urgent", label: t("今日截止"), icon: Bell },
+  { key: "top5", label: t("5星必读"), icon: Sparkles },
   { key: "starred", label: t("我的收藏"), icon: Check },
   { key: "all", label: t("全部收录"), icon: AlignJustify },
   { key: "hidden", label: t("已关闭"), icon: EyeOff },
@@ -210,7 +209,7 @@ const PRESETS: Preset[] = [...PRIMARY_CHANNELS, ...SECONDARY_VIEWS];
 
 
 // 主仓库地址：顶栏 GitHub 图标跳这里
-const REPO_URL = "https://github.com/ZiChuanLan/freebie-radar";
+const REPO_URL = "https://github.com/spacker-343-forks/freebie-radar";
 // 移动端顶栏图标按钮统一尺寸，5 个并排也不挤
 const ICON_BTN =
   "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-ink-200 bg-surface text-ink-600 transition-colors hover:bg-ink-100 hover:text-ink-950";
@@ -764,9 +763,9 @@ export function App() {
     sources: enabledSources.filter((s) => groupOfSource(s) === g.key),
   })).filter((g) => g.sources.length > 0);
 
-  // 公开区显示「资源流 / 赛道图谱 / 今日热点 / 每日精选」，其余 Tab 只有进管理区后才出现
+  // 公开区显示「情报流 / 赛道图谱 / 今日热点 / 每日精选」，其余 Tab 只有进管理区后才出现
   const tabs: { key: Tab; label: string; icon: typeof Activity; badge?: number }[] = [
-    { key: "feed", label: t("资源流"), icon: Activity },
+    { key: "feed", label: t("情报流"), icon: Activity },
     { key: "tracks", label: t("赛道图谱"), icon: Compass },
     { key: "hot", label: t("今日热点"), icon: Flame },
     { key: "digest", label: t("每日精选"), icon: Radar },
@@ -913,7 +912,7 @@ export function App() {
         <div className="flex items-center justify-between gap-2 px-1">
           <div className="flex items-center gap-2">
             <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-accent-solid" aria-hidden="true" />
-            <h1 className="shrink-0 whitespace-nowrap text-[14px] font-semibold tracking-tight text-ink-950">{t("资源雷达")}</h1>
+            <h1 className="shrink-0 whitespace-nowrap text-[14px] font-semibold tracking-tight text-ink-950">{t("生财雷达")}</h1>
           </div>
           <span className="hidden font-mono text-[11px] tabular-nums text-ink-400 lg:inline">
             {stats.data?.totals.aiKept ?? "—"} {t("精选")}
@@ -992,7 +991,7 @@ export function App() {
                 }
               }
             }}
-            placeholder={t("搜索资源、兑换码…")}
+            placeholder={t("搜索实战拆解、SOP、赛道关键词…")}
             className="h-8 w-full rounded-md border border-ink-200 bg-surface pr-8 pl-8 text-[12px] text-ink-950 transition-colors outline-none placeholder:text-ink-400 focus:border-accent"
           />
           {search ? (
@@ -1282,7 +1281,7 @@ export function App() {
                     {catOpen && (
                       <div id="category-filter-options" role="group" aria-label={t("筛选分类")} className="pop-enter panel absolute top-full left-0 z-40 mt-1.5 w-[260px] p-2.5 shadow-lg">
                         <div className="mb-2 flex items-center justify-between text-[11px] text-ink-500">
-                          <span>{preset === "news" ? t("要闻栏目（支持多选）") : preset === "info" ? t("行业资讯栏目（支持多选）") : preset === "deal" ? t("好价分类（支持多选）") : preset === "opensource" ? t("开源方向（支持多选）") : t("福利分类（支持多选）")}</span>
+                          <span>{preset === "news" ? t("要闻栏目（支持多选）") : preset === "info" ? t("行业资讯栏目（支持多选）") : preset === "deal" ? t("好价分类（支持多选）") : preset === "opensource" ? t("开源方向（支持多选）") : preset === "verified" ? t("福利分类（支持多选）") : t("细分赛道（支持多选）")}</span>
                           {categories.length > 0 && (
                             <button
                               type="button"
@@ -1363,7 +1362,7 @@ export function App() {
                   </select>
                   </>}
 
-                  {advancedFilters && preset !== "news" && preset !== "info" && preset !== "opensource" && (
+                  {advancedFilters && !NON_PRICE_PRESETS.has(preset) && (
                     <>
                       <select
                         value={priceCap}
@@ -1444,7 +1443,7 @@ export function App() {
                     <option value="score">{t("高分")}</option>
                     <option value="oldest">{t("最早")}</option>
                     <option value="expiring">{t("快截止")}</option>
-                    {preset !== "news" && preset !== "info" && <option value="price_asc">{t("低价")}</option>}
+                    {!NON_PRICE_PRESETS.has(preset) && <option value="price_asc">{t("低价")}</option>}
                   </select>
 
                   <button
@@ -1805,7 +1804,7 @@ export function App() {
             <h2 className="text-[17px] font-semibold text-ink-950">{t("登录后查看账号与通知")}</h2>
             <p className="text-[13px] text-ink-500">{t("未登录时，收藏和屏蔽保存在当前浏览器中。")}</p>
             {bootData.loginEnabled && <button type="button" className="rounded-md bg-solid px-4 py-2 text-[13px] text-on-solid" onClick={() => { setAuthHash(null); setAuthOpen(true); }}>{t("登录")}</button>}
-            <button type="button" className="scope-link ml-3" onClick={() => handleTab("feed")}>{t("回到资源流")}</button>
+            <button type="button" className="scope-link ml-3" onClick={() => handleTab("feed")}>{t("回到情报流")}</button>
           </div>}
           {me && tab === "me" && bootData && <UserPushPanel key={me.id} boot={bootData} />}
           {adminReady && tab === "site" && <SiteAdminPanel onPublicConfigChange={boot.reload} />}
@@ -1903,7 +1902,7 @@ export function App() {
         </main>
 
         <footer className="mt-auto flex flex-wrap items-center justify-between gap-2 border-t border-ink-200 px-3.5 py-3 text-[12px] text-ink-400 sm:px-6">
-          <span>{t("资源雷达 · 多源聚合 · 浏览筛选与通知配置独立")}</span>
+          <span>{t("生财雷达 · 生财有术 MCP 全文归档 · AI 脱水与立项拆解知识库")}</span>
           <a href={REPO_URL} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-ink-500 hover:text-accent" aria-label={t("GitHub 主仓库")}><Github size={12} /> GitHub</a>
           <span className="font-mono tabular-nums">
             {t("{active} 条在库 · {unread} 条未读", { active: stats.data?.totals.active ?? 0, unread: stats.data?.totals.unread ?? 0 })}

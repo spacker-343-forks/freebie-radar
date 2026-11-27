@@ -42,6 +42,7 @@ export const EN_ITEMVIEW: Record<string, string> = {
   "低价值/水帖 · ": "Low value / filler · ",
   "重要新闻 · ": "Top news · ",
   "行业资讯 · ": "Industry news · ",
+  "实战干货 · ": "Practical pick · ",
   "开源项目 · ": "Open source · ",
   "特价好价 · ": "Deals · ",
   "可领取福利 · ": "Claimable freebie · ",

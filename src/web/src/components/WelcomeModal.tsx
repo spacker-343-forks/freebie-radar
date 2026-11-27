@@ -1,5 +1,5 @@
 import { Dialog } from "./Dialog.tsx";
-import { BookOpen, Globe2, Send, ShieldCheck, X } from "lucide-react";
+import { BookOpen, Globe2, Send, ShieldCheck, X, Zap } from "lucide-react";
 import type { Bootstrap } from "../lib/session.ts";
 import { t } from "../lib/i18n.ts";
 
@@ -17,12 +17,16 @@ export function WelcomeModal({
   onLogin: () => void;
 }) {
   const ob = boot.onboarding;
-  const isPublic = boot.siteMode === "public";
   const cards = [
-    isPublic && {
+    {
+      icon: Zap,
+      title: t("⚡ 立项拆解与赛道图谱"),
+      body: t("带有「⚡立项书」标识的高分帖内置启动成本、变现公式与单人 MVP 清单；左侧「赛道图谱」汇总 12 大主流变现流派白皮书。"),
+    },
+    {
       icon: ShieldCheck,
-      title: t("不登录也不会互相影响"),
-      body: t("不想看、收藏、已读、快捷屏蔽都只存在你自己的浏览器里；登录后才跨设备同步。"),
+      title: t("本机偏好与富文本永久快照"),
+      body: t("收藏、已读、屏蔽词保存在当前浏览器；所有帖子均已归档完整图文快照，原帖删除也不影响站内阅读。"),
     },
     boot.loginEnabled && {
       icon: Send,

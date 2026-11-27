@@ -6,6 +6,8 @@ export const EN_CORE: Record<string, string> = {
   "切换界面语言：{lang}": "Switch UI language: {lang}",
   "合并失败": "Merge failed",
   "资源雷达 · Resource Radar": "Resource Radar",
+  "生财雷达 · 商业情报与实战知识库": "SCYS Radar · Business Intel & Action Vault",
+  "生财有术 MCP": "SCYS MCP",
   "刚刚": "just now",
   "{n} 分钟前": "{n} min ago",
   "{n} 小时前": "{n} h ago",

@@ -106,7 +106,7 @@ const KIND_STYLE: Record<string, string> = {
 };
 
 function KindBadge({ kind, category, inline = false }: { kind: string | null | undefined; category?: string | null; inline?: boolean }) {
-  if (!kind || kind === "freebie" || kind === "noise") return null;
+  if (!kind || kind === "freebie" || kind === "noise" || kind === "info") return null;
   // 网盘/网课资源本身是「资源分享」，分类标签已经说清内容性质；
   // kind 五类里没有资源形态，AI 只能落 info，再挂「行业资讯」就和「网盘资源」自相矛盾了
   if ((category === "pan" || category === "course") && (kind === "info" || kind === "news")) return null;
@@ -823,7 +823,7 @@ export function ItemDetailDrawer({
                     : item.kind === "news"
                       ? t("重要新闻 · ")
                       : item.kind === "info"
-                        ? t("行业资讯 · ")
+                        ? t("实战干货 · ")
                         : item.kind === "opensource"
                           ? t("开源项目 · ")
                           : item.kind === "deal"

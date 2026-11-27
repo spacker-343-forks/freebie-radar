@@ -20,6 +20,7 @@ export const EN_MISC: Record<string, string> = {
   "邀请码校验失败": "Invite code check failed",
   "输入邀请码完成注册": "Enter an invite code to finish signing up",
   "登录资源雷达": "Sign in to Resource Radar",
+  "登录生财雷达": "Sign in to SCYS Radar",
   "你的登录身份已验证，再填一枚邀请码即可开通账号": "Your identity is verified — one invite code and your account is ready",
   "登录后可跨设备同步收藏与屏蔽，并绑定自己的 Telegram Bot": "Sign in to sync stars and blocks across devices and connect your own Telegram bot",
   "邀请码": "Invite code",
@@ -53,6 +54,10 @@ export const EN_MISC: Record<string, string> = {
 
   // WelcomeModal
   "不登录也不会互相影响": "No sign-in, no shared state",
+  "⚡ 立项拆解与赛道图谱": "⚡ Dossiers & Track Map",
+  "带有「⚡立项书」标识的高分帖内置启动成本、变现公式与单人 MVP 清单；左侧「赛道图谱」汇总 12 大主流变现流派白皮书。": "High-score posts marked ⚡Dossier include startup cost, unit economics formulas, and a solo MVP checklist; Track Map on the left summarizes whitepapers across major monetization playbooks.",
+  "本机偏好与富文本永久快照": "Local Preferences & Permanent Snapshots",
+  "收藏、已读、屏蔽词保存在当前浏览器；所有帖子均已归档完整图文快照，原帖删除也不影响站内阅读。": "Saved, read, and blocked state stays in your browser; every post stores a rich-text snapshot so deleted originals remain readable here.",
   "不想看、收藏、已读、快捷屏蔽都只存在你自己的浏览器里；登录后才跨设备同步。": "Dismissed, starred, read and quick-blocked state lives only in your browser; sign in to sync across devices.",
   "绑定自己的 Telegram Bot": "Connect your own Telegram bot",
   "登录后可填自己的 Bot Token 与 Chat ID，按个人规则收推送，不会打扰别人。": "Once signed in, add your own bot token and chat ID to get pushes by your own rules without bothering anyone else.",
@@ -72,6 +77,7 @@ export const EN_MISC: Record<string, string> = {
   "{h} 小时": "{h} hours",
   "今日热点": "Trending today",
   "已做跨源事件去重，点词或分类直接跳回资源流": "Cross-source events are deduped — click a word or category to jump back to the feed",
+  "已做跨源事件去重，点词或分类直接跳回情报流": "Cross-source events are deduped — click a word or category to jump back to the intel feed",
   "重新统计": "Recalculate",
   "正在统计 {w} 热词…": "Counting hot words for {w}…",
   "独立事件数": "Unique events",
@@ -167,6 +173,8 @@ export const EN_MISC: Record<string, string> = {
   "共 {n} 篇": "{n} posts",
   "暂无代表贴记录": "No featured posts recorded yet",
 
+  "欢迎使用生财雷达": "Welcome to SCYS Radar",
+  "生财雷达直连生财有术官方 MCP，全文归档精华帖、风向标、项目库案例与历期大航海实战手册，\n通过 AI 脱水引擎拦截水帖与私域引流软广、提炼 [底牌门槛]，并自动生成《⚡实战立项拆解书》与《🧭赛道实战白皮书》。\n\n· 顶部六大核心频道按「精选干货 / 立项拆解 / 航海手册 / 项目案例 / 开源与工具 / 福利与资料」分流直达。\n· 无需登录即可自由浏览，「不想看 / 收藏 / 已读 / 屏蔽词」均独立保存在本机浏览器里，互不干扰。\n· 每篇归档支持站内富文本快照永久阅读与目录导航，重要实操 SOP 与评论洞察随时回看。": "SCYS Radar connects directly to the official SCYS MCP to archive full-text picks, trend radar reports, project library cases and Voyage field manuals.\nIts AI distiller filters out fluff and self-promo, extracts [Prerequisites], and automatically generates ⚡ Project Dossiers and 🧭 Track Whitepapers.\n\n· The 6 top channels route directly to Top Picks, Dossiers, Field Manuals, Project Cases, OSS & Tools, and Perks & Packs.\n· Browse freely without signing in — hidden, starred, read and block rules stay isolated in your own browser.\n· Every archived post opens in a permanent rich-text reader with a chapter/heading TOC for quick SOP and comment review.",
   "欢迎来到资源雷达": "Welcome to Resource Radar",
   "资源雷达把社区、游戏平台、软件限免站、GitHub、Reddit、Bluesky、Telegram 与自定义 RSS 的信息聚合到一起，\n先过规则初筛与统一屏蔽词，再由 AI 语义定级分流，最后按你的规则推送到 Telegram。\n\n· 不登录也能浏览全部公开内容，「不想看 / 收藏 / 已读」只存在你自己的浏览器里，不会影响别人。\n· 用 LINUX DO 登录后可跨设备同步个人偏好，还能绑定自己的 Telegram Bot，按个人规则收推送。\n· 每条资源都带原始链接，兑换码与截止时间请自行核对，本站只做聚合与筛选，不对第三方活动的有效性负责。": "Resource Radar pulls together feeds from communities, game platforms, software giveaway sites, GitHub, Reddit, Bluesky, Telegram and custom RSS.\nA rule pre-filter and one unified blocklist run first, then AI grades and routes every item, and finally your own rules push it to Telegram.\n\n· All public content is browsable without logging in; “hide / star / read” lives only in your own browser and never affects anyone else.\n· Signing in with LINUX DO syncs preferences across devices and lets you bind your own Telegram bot with personal push rules.\n· Every item keeps its original link — verify codes and expiry dates yourself; this site only aggregates and filters and is not responsible for third-party offers.",
 };

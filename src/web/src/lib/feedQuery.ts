@@ -17,10 +17,13 @@ export type FeedState = {
 };
 
 export const DEFAULT_FEED_STATE: FeedState = {
-  preset: "info", search: "", source: "", categories: [], lang: "all", sort: "newest",
+  preset: "picks", search: "", source: "", categories: [], lang: "all", sort: "newest",
   range: "auto", priceCap: "auto", minScore: "all", obtain: "auto", kindFilter: "auto", unreadOnly: false,
 };
-const PRESETS = new Set(["verified", "offline", "pan", "deal", "opensource", "news", "info", "codes", "urgent", "starred", "hidden", "review", "all"]);
+const PRESETS = new Set([
+  "picks", "dossiers", "manuals", "projects", "tools", "perks", "top5",
+  "verified", "offline", "pan", "deal", "opensource", "news", "info", "codes", "urgent", "starred", "hidden", "review", "all",
+]);
 const FIELDS = { preset: "preset", search: "q", source: "source", lang: "filterLang", sort: "sort", range: "range", priceCap: "price", minScore: "score", obtain: "obtain", kindFilter: "kind" } as const;
 const DAYS: Record<string, number> = { "1d": 1, "3d": 3, "7d": 7, "30d": 30 };
 const pick = (value: string | null, allowed: readonly string[], fallback: string) => value && allowed.includes(value) ? value : fallback;
@@ -28,7 +31,7 @@ const pick = (value: string | null, allowed: readonly string[], fallback: string
 /** Interface language (`lang`) is intentionally distinct from title language (`filterLang`). */
 export function readFeedState(search: string): FeedState {
   const p = new URLSearchParams(search);
-  const preset = pick(p.get("preset"), [...PRESETS], "info");
+  const preset = pick(p.get("preset"), [...PRESETS], "picks");
   const allowed = new Set(categoriesForPreset(preset));
   const kind = p.get("kind"), obtain = p.get("obtain");
   return {

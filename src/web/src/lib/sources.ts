@@ -27,9 +27,10 @@ export {
   isCategory,
 } from "../../../shared/taxonomy.ts";
 
-export type SourceGroupKey = "news" | "community" | "game" | "software" | "deals";
+export type SourceGroupKey = "scys" | "news" | "community" | "game" | "software" | "deals";
 
 export const SOURCE_GROUPS: { key: SourceGroupKey; label: string }[] = [
+  { key: "scys", label: t("生财有术 MCP") },
   { key: "community", label: t("国内社区与线报") },
   { key: "news", label: t("重要新闻与行业资讯") },
   { key: "game", label: t("游戏喜加一与史低") },
@@ -39,6 +40,9 @@ export const SOURCE_GROUPS: { key: SourceGroupKey; label: string }[] = [
 
 export function groupOfSource(s: Source): SourceGroupKey {
   const id = s.id;
+  if (id.startsWith("scys-")) {
+    return "scys";
+  }
   if (
     id.startsWith("cctv-") ||
     id.startsWith("rss-chinanews-") ||
@@ -65,7 +69,6 @@ export function groupOfSource(s: Source): SourceGroupKey {
     return "news";
   }
   if (
-    id.startsWith("scys-") ||
     id.startsWith("linuxdo-") ||
     id.startsWith("v2ex-") ||
     id.includes("nodeseek") ||

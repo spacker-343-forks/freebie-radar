@@ -80,7 +80,7 @@ export function HotPanel({
         <div className="flex items-center gap-2">
           <Flame size={15} className="text-accent" />
           <span className="text-[14px] font-semibold text-ink-950">{t("今日热点")}</span>
-          <span className="text-[12px] text-ink-500">{t("已做跨源事件去重，点词或分类直接跳回资源流")}</span>
+          <span className="text-[12px] text-ink-500">{t("已做跨源事件去重，点词或分类直接跳回情报流")}</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-0.5 rounded-md border border-ink-200 bg-surface p-0.5">
