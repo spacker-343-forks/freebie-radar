@@ -41,6 +41,14 @@ import {
 import { buildRssXml, rssEtag, type RssItem } from "./rss.ts";
 import { checkForUpdate, getBuildInfo, getUpdateJob, hostUpdateCommand, runUpdate } from "./updater.ts";
 import { checkUpstreamUpdates, dismissUpstreamWatch, getUpstreamWatchState } from "./upstream-watch.ts";
+import { backfillDossiers, ensureDossierTable, generateItemDossier, getItemDossier } from "./dossier.ts";
+import {
+  ensureTracksTable,
+  getTrackDetail,
+  isTrackSynthesisRunning,
+  listTracks,
+  synthesizeAllTracks,
+} from "./tracks.ts";
 import { isPublicSite, siteMode } from "./config.ts";
 import {
   addCustomRssSource,
@@ -162,10 +170,11 @@ export type ItemRow = {
   first_seen_at: string;
   last_seen_at: string;
   canonical_id?: number | null;
+  has_dossier?: number;
 };
 
 // List payloads never select full snapshots. The drawer fetches content on demand.
-const LIST_COLUMNS = "id, source_id, external_id, url, url_key, title_key, title, SUBSTR(summary, 1, 1200) AS summary, author, category, image_url, kind, ai_quality, tags, codes, price, is_free, obtain, score, expires_at, published_at, status, starred, ai, read_at, pushed_at, first_seen_at, last_seen_at, canonical_id";
+const LIST_COLUMNS = "id, source_id, external_id, url, url_key, title_key, title, SUBSTR(summary, 1, 1200) AS summary, author, category, image_url, kind, ai_quality, tags, codes, price, is_free, obtain, score, expires_at, published_at, status, starred, ai, read_at, pushed_at, first_seen_at, last_seen_at, canonical_id, (EXISTS (SELECT 1 FROM item_dossiers d WHERE d.item_id = items.id)) AS has_dossier";
 
 /** 订阅命中的关键词（都转小写比较），用于前端高亮与筛选。 */
 function matchKeywords(row: ItemRow, keywords: string[]): string[] {
@@ -205,6 +214,7 @@ function shape(row: ItemRow, keywords: string[] = [], blockedBy: string | null =
     ai,
     starred: row.starred === 1,
     read: Boolean(row.read_at),
+    hasDossier: Boolean(row.has_dossier),
     raw: undefined,
     matched: matchKeywords(row, keywords),
     blockedBy,
@@ -661,14 +671,17 @@ const PUBLIC_GET_EXACT = new Set([
   "/api/site/bootstrap",
   "/api/rss",
   "/api/upstream-watch",
+  "/api/tracks",
 ]);
 
-const PUBLIC_GET_PREFIX = ["/api/items/", "/api/digests/"];
+const PUBLIC_GET_PREFIX = ["/api/items/", "/api/digests/", "/api/tracks/"];
 
 let warnedNoAdminToken = false;
 let warnedAdminLocked = false;
 
 export function registerApi(app: Hono) {
+  ensureDossierTable();
+  ensureTracksTable();
   registerSecurity(app);
   /**
    * 鉴权分层（顺序即优先级）：
@@ -907,9 +920,24 @@ const fetchLimit = Math.min(Math.max(offset + limit * 3, 240), 600);
     const subKeywords =
       id.siteMode === "public" ? pubUser !== null ? loadUserSubscriptions(pubUser) : []
         : all<{ keyword: string }>("SELECT keyword FROM subscriptions").map((r) => r.keyword);
+    const dossier = getItemDossier(row.id);
     return c.json({ ...applyUserStates([shape(row, subKeywords)], pubUser)[0],
+      hasDossier: Boolean(dossier || row.has_dossier),
+      dossier,
       ...(id.isAdmin ? { manualClassification: getManualClassification(row.id) } : {}),
     });
+  });
+
+  app.post("/api/items/:id/dossier", async (c) => {
+    const itemId = Number(c.req.param("id"));
+    if (!Number.isSafeInteger(itemId) || itemId < 1) return c.json({ error: "条目 ID 无效" }, 400);
+    if (!get("SELECT id FROM items WHERE id = ?", itemId)) return c.json({ error: "资源不存在" }, 404);
+    try {
+      const dossier = await generateItemDossier(itemId, { force: true });
+      return c.json({ ok: true, dossier });
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
   });
   app.patch("/api/admin/items/:id/classification", async (c) => {
     const id = Number(c.req.param("id"));
@@ -1476,6 +1504,16 @@ const fetchLimit = Math.min(Math.max(offset + limit * 3, 240), 600);
     const mode: BackfillMode =
       body.mode === "recent" || body.mode === "rejected" ? body.mode : "pending";
     return c.json(await backfillAi(limit, mode));
+  });
+
+  app.post("/api/ai/backfill-dossiers", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { minQuality?: number; limit?: number; concurrency?: number };
+    const res = await backfillDossiers({
+      minQuality: typeof body.minQuality === "number" ? body.minQuality : undefined,
+      limit: typeof body.limit === "number" ? body.limit : undefined,
+      concurrency: typeof body.concurrency === "number" ? body.concurrency : undefined,
+    });
+    return c.json({ ok: true, ...res });
   });
 
   app.post("/api/ai/reclassify", async (c) => {
@@ -2125,6 +2163,71 @@ const fetchLimit = Math.min(Math.max(offset + limit * 3, 240), 600);
     const body = (await c.req.json().catch(() => null)) as { sha?: unknown } | null;
     const sha = typeof body?.sha === "string" ? body.sha : undefined;
     return c.json(dismissUpstreamWatch(sha));
+  });
+
+  /* ---------------------------------------------------------------- *
+   * 赛道全景图谱（白皮书列表 / 详情 / AI 合成）
+   * ---------------------------------------------------------------- */
+
+  app.get("/api/tracks", (c) => {
+    return c.json({
+      tracks: listTracks(),
+      synthesizing: isTrackSynthesisRunning(),
+    });
+  });
+
+  app.get("/api/tracks/:slug", (c) => {
+    const slug = c.req.param("slug");
+    const track = getTrackDetail(slug);
+    if (!track) return c.json({ error: "track not found" }, 404);
+
+    const viewer = identityOf(c);
+    const pubUser = viewer.siteMode === "public" ? (viewer.user?.id ?? null) : null;
+    const subKeywords =
+      viewer.siteMode === "public"
+        ? pubUser !== null
+          ? loadUserSubscriptions(pubUser)
+          : []
+        : all<{ keyword: string }>("SELECT keyword FROM subscriptions").map((r) => r.keyword);
+
+    const ids = track.topItemIds.filter((id) => Number.isInteger(id) && id > 0).slice(0, 30);
+    let items: ReturnType<typeof shape>[] = [];
+    if (ids.length) {
+      const ph = ids.map(() => "?").join(", ");
+      const statusClause = viewer.siteMode === "public" && !viewer.isAdmin ? "AND status = 'active'" : "";
+      const rows = all<ItemRow>(
+        `SELECT ${LIST_COLUMNS} FROM items WHERE id IN (${ph}) ${statusClause}`,
+        ...ids,
+      );
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      const ordered = ids.map((id) => byId.get(id)).filter((r): r is ItemRow => Boolean(r));
+      items = applyUserStates(
+        ordered.map((r) => shape(r, subKeywords)),
+        pubUser,
+      );
+    }
+
+    return c.json({ track, items });
+  });
+
+  app.post("/api/tracks/synthesize", async (c) => {
+    if (isTrackSynthesisRunning()) {
+      return c.json({ ok: true, running: true });
+    }
+    const body = (await c.req.json().catch(() => ({}))) as { wait?: boolean; maxTracks?: number };
+    const maxTracks = typeof body.maxTracks === "number" ? body.maxTracks : undefined;
+    if (body.wait === true) {
+      try {
+        const tracks = await synthesizeAllTracks({ maxTracks });
+        return c.json({ ok: true, running: false, tracks });
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+    void synthesizeAllTracks({ maxTracks }).catch((err) => {
+      console.error("[tracks] 后台合成失败:", err instanceof Error ? err.message : err);
+    });
+    return c.json({ ok: true, running: true });
   });
 
   /* ================================================================== *

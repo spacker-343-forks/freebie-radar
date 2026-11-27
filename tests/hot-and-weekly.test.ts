@@ -10,6 +10,10 @@ Object.assign(process.env, {
   AI_BASE_URL: "",
   AI_MODEL: "",
   AI_API_KEY: "",
+  AI_FALLBACK_BASE_URL: "",
+  AI_FALLBACK_API_KEY: "",
+  AI_FALLBACK_MODEL: "",
+  AI_DEEP_MODEL: "",
   PUSH_CHANNEL: "none",
   ENABLE_SCHEDULER: "false",
 });
@@ -378,8 +382,8 @@ test("纯生财源默认推送态放行 info/opensource 与历史回溯补位，
     assert.equal(dailyRes.report?.picks[0]?.threshold, "需投流预算");
     assert.equal(dailyRes.report?.picks[1]?.threshold, "需编程");
     assert.ok(dailyRes.report?.picks[0]?.url?.startsWith("https://example.com/"), "须用真实条目 URL 覆盖幻觉链接");
-    assert.equal(sentRequests[0]!.model, "gpt-6.1-terra");
-    assert.equal(sentRequests[0]!.reasoning_effort, "high");
+    assert.equal(sentRequests[0]!.model, "gpt-6.2-astra");
+    assert.equal(sentRequests[0]!.reasoning_effort, "xhigh");
     assert.equal(sentRequests[0]!.hasTemp, false);
     const savedDaily = get<{ item_ids: string }>("SELECT item_ids FROM digests WHERE date = ?", dailyRes.date)!;
     assert.deepEqual(JSON.parse(savedDaily.item_ids), [backfillId, recentId]);

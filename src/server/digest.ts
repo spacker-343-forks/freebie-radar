@@ -1,7 +1,7 @@
 import { config } from "./config.ts";
 import { all, get, run } from "./db.ts";
 import { CATEGORY_LABEL, dedupeByTitle, KIND_LABEL, type ContentKind, type DedupeEntry } from "./enrich/index.ts";
-import { aiReady, aiSummaryExcerpt, getAiSettings, postChatCompletions } from "./enrich/ai-settings.ts";
+import { aiReady, aiSummaryExcerpt, getAiSettings, postChatCompletions, resolveDeepModel } from "./enrich/ai-settings.ts";
 import { hasValueSignal, isNoiseTitle } from "./enrich/noise.ts";
 import { isBlocked, loadActiveBlockRules } from "./enrich/blocklist.ts";
 import { getPushSettings, passesPushFilters, sourceLabel, type PushSettings } from "./push.ts";
@@ -326,7 +326,7 @@ async function synthesizeDigestWithAi(
     const { res } = await postChatCompletions({
       baseUrl: s.baseUrl,
       apiKey: s.apiKey,
-      model: s.model,
+      model: resolveDeepModel(s),
       messages: [
         { role: "system", content: buildEditorSystemPrompt(mode, topN) },
         { role: "user", content: JSON.stringify(payload) },

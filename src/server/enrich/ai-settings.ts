@@ -223,9 +223,36 @@ export function saveAiSettings(patch: Partial<AiSettings>): AiSettings {
   return next;
 }
 
+const QUOTA_EXHAUSTED_RE = /insufficient_quota|billing_hard_limit|exceeded.*quota|quota.*exceeded|credit|deactivated|expired/i;
+const FALLBACK_CIRCUIT_MS = 6 * 3600_000;
+
+let primaryExhaustedUntil = 0;
+let loggedFallbackSwitch = false;
+
+export function resetAiFallbackCircuit(): void {
+  primaryExhaustedUntil = 0;
+  loggedFallbackSwitch = false;
+}
+
+function readFallbackConfig() {
+  const baseUrl = (process.env.AI_FALLBACK_BASE_URL ?? "").trim().replace(/\/+$/, "");
+  const apiKey = (process.env.AI_FALLBACK_API_KEY ?? "").trim();
+  const model = (process.env.AI_FALLBACK_MODEL ?? "").trim();
+  return { baseUrl, apiKey, model };
+}
+
+export function resolveDeepModel(s: AiSettings): string {
+  const envDeep = (process.env.AI_DEEP_MODEL ?? "").trim();
+  if (envDeep) return envDeep;
+  const m = (s.model || "").trim();
+  if (/^gpt-6\./i.test(m)) return "gpt-6.2-astra:xhigh";
+  return m || "gpt-6.2-astra:xhigh";
+}
+
 /** 运行时是否真的能调 AI（开关开、端点与模型都有）。 */
 export function aiReady(s = getAiSettings()): boolean {
-  return s.enabled && Boolean(s.baseUrl && s.model);
+  const fb = readFallbackConfig();
+  return s.enabled && Boolean((s.baseUrl || fb.baseUrl) && s.model);
 }
 
 /** 是否命中入口噪音初筛（求助/问价/版本更新补丁 + 用户自定义噪音词）。 */
@@ -273,6 +300,7 @@ export function feedbackStats(limit = 6): {
 
 /** 给前端的安全视图：密钥打码。 */
 export function publicAiSettings(s = getAiSettings()) {
+  const fb = readFallbackConfig();
   return {
     apiKey: "",
     enabled: s.enabled,
@@ -295,6 +323,8 @@ export function publicAiSettings(s = getAiSettings()) {
     aiDedupWindowHours: s.aiDedupWindowHours,
     hasKey: Boolean(s.apiKey),
     keyHint: s.apiKey ? "••••" + s.apiKey.slice(-4) : "",
+    hasFallback: Boolean(fb.baseUrl),
+    fallbackBaseUrl: fb.baseUrl,
     ready: aiReady(s),
     promptIsDefault: !s.systemPrompt.trim(),
     defaultPrompt: DEFAULT_PROMPT,
@@ -374,7 +404,13 @@ export function buildChatCompletionBody(options: {
   return body;
 }
 
-/** Send chat completions request and automatically retry once without temperature if HTTP 400 rejects temperature. */
+function isQuotaOrAuthExhausted(status: number, body: string): boolean {
+  if (status === 402 || status === 401 || status === 403) return true;
+  if (status === 429 && QUOTA_EXHAUSTED_RE.test(body)) return true;
+  return false;
+}
+
+/** Send chat completions request, automatically retrying without temperature if rejected and failing over to fallback gateway on quota/auth exhaustion. */
 export async function postChatCompletions(params: {
   baseUrl: string;
   apiKey?: string;
@@ -383,45 +419,84 @@ export async function postChatCompletions(params: {
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
 }): Promise<{ res: Response; ttfbMs: number }> {
-  const endpoint = params.baseUrl.replace(/\/+$/, "") + "/chat/completions";
   const fetcher = params.fetchImpl ?? fetch;
-  const headers: Record<string, string> = {
-    "content-type": "application/json",
-    ...(params.apiKey ? { authorization: "Bearer " + params.apiKey } : {}),
-  };
-  const send = async (omitTemperature: boolean) => {
-    const t0 = Date.now();
-    const res = await fetcher(endpoint, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(
-        buildChatCompletionBody({
-          model: params.model,
-          messages: params.messages,
-          omitTemperature,
-        }),
-      ),
-      signal: params.signal,
-    });
-    return { res, ttfbMs: Date.now() - t0 };
+  const fb = readFallbackConfig();
+  const normalizedPrimary = params.baseUrl.trim().replace(/\/+$/, "");
+  const hasValidFallback = Boolean(fb.baseUrl) && fb.baseUrl !== normalizedPrimary;
+
+  const sendTo = async (baseUrl: string, apiKey: string | undefined, model: string) => {
+    const endpoint = baseUrl.replace(/\/+$/, "") + "/chat/completions";
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+      ...(apiKey ? { authorization: "Bearer " + apiKey } : {}),
+    };
+    const sendOnce = async (omitTemperature: boolean) => {
+      const t0 = Date.now();
+      const res = await fetcher(endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(
+          buildChatCompletionBody({
+            model,
+            messages: params.messages,
+            omitTemperature,
+          }),
+        ),
+        signal: params.signal,
+      });
+      return { res, ttfbMs: Date.now() - t0 };
+    };
+
+    const first = await sendOnce(false);
+    if (first.res.status !== 400 || parseModelSpec(model).isReasoningModel) {
+      return first;
+    }
+    const errBody = await first.res.text();
+    if (/temperature/i.test(errBody)) {
+      return await sendOnce(true);
+    }
+    return {
+      res: new Response(errBody, {
+        status: first.res.status,
+        statusText: first.res.statusText,
+        headers: first.res.headers,
+      }),
+      ttfbMs: first.ttfbMs,
+    };
   };
 
-  const first = await send(false);
-  if (first.res.status !== 400 || parseModelSpec(params.model).isReasoningModel) {
-    return first;
+  if (hasValidFallback && Date.now() < primaryExhaustedUntil) {
+    return await sendTo(fb.baseUrl, fb.apiKey || params.apiKey, fb.model || params.model);
   }
-  const errBody = await first.res.text();
-  if (/temperature/i.test(errBody)) {
-    return await send(true);
+
+  const primaryRes = await sendTo(params.baseUrl, params.apiKey, params.model);
+  if (
+    hasValidFallback &&
+    (primaryRes.res.status === 402 ||
+      primaryRes.res.status === 401 ||
+      primaryRes.res.status === 403 ||
+      primaryRes.res.status === 429)
+  ) {
+    const errBody = await primaryRes.res.text();
+    if (isQuotaOrAuthExhausted(primaryRes.res.status, errBody)) {
+      primaryExhaustedUntil = Date.now() + FALLBACK_CIRCUIT_MS;
+      if (!loggedFallbackSwitch) {
+        loggedFallbackSwitch = true;
+        console.log(`[ai] 主端点额度耗尽或不可用，自动无缝切换至备用端点 ${fb.baseUrl}`);
+      }
+      return await sendTo(fb.baseUrl, fb.apiKey || params.apiKey, fb.model || params.model);
+    }
+    return {
+      res: new Response(errBody, {
+        status: primaryRes.res.status,
+        statusText: primaryRes.res.statusText,
+        headers: primaryRes.res.headers,
+      }),
+      ttfbMs: primaryRes.ttfbMs,
+    };
   }
-  return {
-    res: new Response(errBody, {
-      status: first.res.status,
-      statusText: first.res.statusText,
-      headers: first.res.headers,
-    }),
-    ttfbMs: first.ttfbMs,
-  };
+
+  return primaryRes;
 }
 
 async function callOnce(
