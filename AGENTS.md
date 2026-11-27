@@ -11,10 +11,14 @@
 
 ---
 
-## 2. Git 仓库与双分支约定
+## 2. Git 仓库、双分支与提交身份约定
 
 - **`origin`（自有仓库）**：`https://github.com/spacker-343-forks/freebie-radar.git`
 - **`upstream`（源头仓库）**：`https://github.com/ZiChuanLan/freebie-radar`
+- **Git 提交身份强制规范（必守）**：
+  - 本机为工作电脑，全局 `~/.gitconfig` 服务于公司内网 GitLab，**严禁修改本机全局 `git config --global` 配置**！
+  - 本项目所有提交**必须且仅通过仓库级本地配置（`git config --local`）**固定使用 GitHub 账号名 **`spacker-343`**（`user.name = spacker-343`，`user.email = 67576022+spacker-343@users.noreply.github.com`，远端凭据固定匹配本机已存储的 `spacker-343` 账号）。
+  - **严禁**将全局真实中文姓名或企业邮箱带入本项目提交，**严禁**混用本机其他 GitHub 账号（如 `lihuabeass-art`）。提交前务必在仓库目录内执行 `git config --local user.name` 与 `git config --local user.email` 校验为 `spacker-343`。
 - **分支职责**：
   - **`main` 分支**：严格保持与上游 `upstream/main` 一致的纯净基线，**禁止直接向 `main` 提交生财定制代码**。
   - **`scys-radar` 分支**：日常开发、部署与定制功能所在的主力分支。
@@ -60,6 +64,7 @@ pnpm start              # 启动线上 Hono 服务（默认端口 8788，托管 
 # 生财专用工具链
 pnpm scys:auth          # MCP 登录授权（--add 追加并发槽位，--status 查看槽位）
 pnpm scys:preset        # 幂等初始化生财数据源开关、脱水 Prompt、屏蔽词与 10 年保留期
+pnpm scys:reclassify    # 0 Token 幂等存量商业赛道分类重映射与假截止时间/兑换码清洗
 pnpm scys:backfill      # 多分区分页历史回溯与流式 AI 脱水（支持断点续跑）
 pnpm scys:manuals       # 遍历历期大航海目录，无损抓取全部实战手册章节（支持偏移续传）
 pnpm scys:burn          # 批量合成《赛道实战白皮书》(--tracks) 与《实战立项拆解书》(--dossiers)
@@ -81,5 +86,6 @@ pnpm scys:burn          # 批量合成《赛道实战白皮书》(--tracks) 与�
 3. **前端改动必须同步构建与补齐 i18n**：
    - `pnpm start` 直接托管 `dist/web/` 静态产物；修改任何 `src/web/` 或被前端引用的 `src/shared/` 文件后，**必须重新执行 `pnpm build`**。
    - 新增 UI 中文文案务必用 `t("...")` 包裹并同步补入 `src/web/src/lib/i18n/en/` 对应词典。注意 `scripts/i18n-check.mjs` 会扫描 `.ts`/`.tsx` 引号字符串中的中文，编写文本解析匹配时请使用正则字面量 `/.../` 而非中文引号字符串。
-4. **密钥与隐私红线**：
+4. **密钥、真实姓名与隐私红线**：
    - 严禁将 `.env`、任何真实 API Key、`ADMIN_TOKEN`、OAuth Token、`data/radar.db*` 或 `data/scys-tools-schema.json` 硬编码或提交进 Git 仓库。
+   - 严禁修改工作电脑全局 `~/.gitconfig`；严禁在本项目 Git 提交作者（Author / Committer）或代码文档中出现个人真实姓名与企业邮箱，本项目内所有 Git 操作统一通过仓库级 `--local` 配置固定为 `spacker-343 <67576022+spacker-343@users.noreply.github.com>`。
