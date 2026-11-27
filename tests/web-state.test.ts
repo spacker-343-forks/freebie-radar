@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { selectGuestItems } from "../src/web/src/lib/session.ts";
 import { installAuthFetch, verifyToken, setToken, clearToken } from "../src/web/src/lib/auth.ts";
-import { isSafeHttpUrl, isSummaryCoveredByContent, parseSnapshotSections, plainCharCount, splitReasonBadge } from "../src/web/src/lib/snapshot.ts";
+import {
+  isSafeHttpUrl,
+  isSummaryCoveredByContent,
+  looksLikeHtml,
+  parseMarkdownBlocks,
+  parseSnapshotSections,
+  plainCharCount,
+  splitReasonBadge,
+} from "../src/web/src/lib/snapshot.ts";
 
 test("访客已关闭、收藏与已读视图互相联动，不把隐藏条目再过滤掉", () => {
   const items = [1, 2, 3].map((id) => ({ id, title: `条目 ${id}`, summary: null, starred: false, read: false, status: "active" }));
@@ -76,5 +84,66 @@ test("快照分段解析、字数统计、XSS URL 白名单与 reason 底牌徽�
   assert.deepEqual(splitReasonBadge("[需基础剪辑] 拆解TikTok矩阵号"), {
     badge: "需基础剪辑",
     text: "拆解TikTok矩阵号",
+  });
+});
+
+test("looksLikeHtml 正确区分含 <br>/代码块示例的 Markdown 与真实 HTML 快照", () => {
+  const manualMd = [
+    "### 01. 找对标账号",
+    "",
+    "对标账号说明，[打开工具站](https://sail.zuoyeguanli.top/#creators)。",
+    "",
+    "##### 类型一：AI 工具／AI 教程",
+    "",
+    "| 编号 / 账号 | 配图 | 代表作 / 链接 |",
+    "| --- | --- | --- |",
+    "| [01｜卡尔](https://www.xiaohongshu.com/user/1) | ![图片](https://img.example.com/a.png) | 内容简介<br>[查看原作](https://www.xiaohongshu.com/user/1/post) |",
+  ].join("\n");
+  assert.equal(looksLikeHtml(manualMd), false);
+
+  const mdWithCodeHtml = [
+    "### HTML 模板示例",
+    "",
+    "```html",
+    "<div class=\"card\"><p>示例</p></div>",
+    "```",
+    "",
+    "行内代码 `<p>tag</p>` 也不应误判。",
+  ].join("\n");
+  assert.equal(looksLikeHtml(mdWithCodeHtml), false);
+
+  assert.equal(looksLikeHtml('<div class="tiptap-wrapper"><p>正文</p></div>'), true);
+  assert.equal(looksLikeHtml('<a href="https://scys.com">原文链接</a>'), true);
+});
+
+test("parseMarkdownBlocks 支持 H5/H6 标题、GFM 表格对齐/转义与任务列表", () => {
+  const md = [
+    "##### 类型一：AI 工具",
+    "###### 子分类说明",
+    "",
+    "| 账号 | 报价 | 说明 |",
+    "| :--- | :---: | ---: |",
+    "| [01](https://example.com) | ¥100 | 第一行<br>第二行 \\| `a|b` |",
+    "",
+    "- [x] 已完成",
+    "- [ ] 待处理",
+  ].join("\n");
+
+  const blocks = parseMarkdownBlocks(md);
+  assert.equal(blocks.length, 4);
+  assert.deepEqual(blocks[0], { type: "heading", level: 5, text: "类型一：AI 工具" });
+  assert.deepEqual(blocks[1], { type: "heading", level: 6, text: "子分类说明" });
+  assert.deepEqual(blocks[2], {
+    type: "table",
+    headers: ["账号", "报价", "说明"],
+    aligns: ["left", "center", "right"],
+    rows: [["[01](https://example.com)", "¥100", "第一行<br>第二行 | `a|b`"]],
+  });
+  assert.deepEqual(blocks[3], {
+    type: "ul",
+    items: [
+      { checked: true, text: "已完成" },
+      { checked: false, text: "待处理" },
+    ],
   });
 });

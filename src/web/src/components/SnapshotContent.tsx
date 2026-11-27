@@ -1,11 +1,11 @@
 import { Fragment, useState, type ReactNode } from "react";
 import { Check, Copy, ExternalLink, FileText, Link2, MessageSquareText } from "lucide-react";
 import { t } from "../lib/i18n.ts";
-import { isSafeHttpUrl, looksLikeHtml, parseSnapshotSections } from "../lib/snapshot.ts";
+import { isSafeHttpUrl, looksLikeHtml, parseMarkdownBlocks, parseSnapshotSections } from "../lib/snapshot.ts";
 
 const URL_IN_TEXT_RE = /(https?:\/\/[^\s<>()[\]"'，。；！？、]+)/gi;
 const INLINE_TOKEN_RE =
-  /(!\[([^\]\n]*)\]\((https?:\/\/[^\s)]+)\)|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|`([^`\n]+)`|\*\*([^*\n]+)\*\*|https?:\/\/[^\s<>()[\]"'，。；！？、]+)/gi;
+  /(!\[([^\]\n]*)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)|\[([^\]\n]+)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)|<br\s*\/?>|`([^`\n]+)`|\*\*([^*\n]+)\*\*|~~([^~\n]+)~~|\*([^*\s][^*\n]*?[^*\s]|[^*\s])\*|https?:\/\/[^\s<>()[\]"'，。；！？、]+)/gi;
 const DROPPED_HTML_TAGS = new Set([
   "script",
   "style",
@@ -35,20 +35,43 @@ function hostOf(url: string): string {
   }
 }
 
-function SnapshotImage({ src, alt = "" }: { src: string; alt?: string }) {
+function SnapshotImage({
+  src,
+  alt = "",
+  compact = false,
+  clickable = true,
+}: {
+  src: string;
+  alt?: string;
+  compact?: boolean;
+  clickable?: boolean;
+}) {
   const [broken, setBroken] = useState(false);
   const safeSrc = isSafeHttpUrl(src);
   if (!safeSrc || broken) return null;
+  const img = (
+    <img
+      src={safeSrc}
+      alt={alt}
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      onError={() => setBroken(true)}
+      className={
+        compact
+          ? "max-h-[180px] min-w-[72px] max-w-[180px] rounded-md border border-ink-200 bg-surface object-contain"
+          : "max-h-[460px] max-w-full rounded-lg border border-ink-200 bg-surface object-contain"
+      }
+    />
+  );
+  if (!clickable) return img;
   return (
-    <a href={safeSrc} target="_blank" rel="noopener noreferrer" className="my-2.5 block max-w-full">
-      <img
-        src={safeSrc}
-        alt={alt}
-        loading="lazy"
-        referrerPolicy="no-referrer"
-        onError={() => setBroken(true)}
-        className="max-h-[460px] max-w-full rounded-lg border border-ink-200 bg-surface object-contain"
-      />
+    <a
+      href={safeSrc}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={compact ? "my-1 block max-w-full" : "my-2.5 block max-w-full"}
+    >
+      {img}
     </a>
   );
 }
@@ -308,23 +331,37 @@ function HtmlBody({ html }: { html: string }) {
   );
 }
 
-function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode {
+type InlineContext = {
+  inLink?: boolean;
+  inTable?: boolean;
+};
+
+function renderInlineMarkdown(text: string, keyPrefix: string, ctx: InlineContext = {}): ReactNode {
   const nodes: ReactNode[] = [];
-  INLINE_TOKEN_RE.lastIndex = 0;
+  const re = new RegExp(INLINE_TOKEN_RE.source, "gi");
   let lastIndex = 0;
   let idx = 0;
   let m: RegExpExecArray | null;
 
-  while ((m = INLINE_TOKEN_RE.exec(text)) !== null) {
+  while ((m = re.exec(text)) !== null) {
     if (m.index > lastIndex) {
       nodes.push(<Fragment key={`${keyPrefix}-s-${idx++}`}>{text.slice(lastIndex, m.index)}</Fragment>);
     }
     if (m[2] !== undefined && m[3] !== undefined) {
-      nodes.push(<SnapshotImage key={`${keyPrefix}-img-${idx++}`} src={m[3]} alt={m[2]} />);
-    } else if (m[4] !== undefined && m[5] !== undefined) {
-      const href = isSafeHttpUrl(cleanUrl(m[5]));
       nodes.push(
-        href ? (
+        <SnapshotImage
+          key={`${keyPrefix}-img-${idx++}`}
+          src={m[3]}
+          alt={m[2]}
+          compact={ctx.inTable}
+          clickable={!ctx.inLink}
+        />,
+      );
+    } else if (m[4] !== undefined && m[5] !== undefined) {
+      const href = isSafeHttpUrl(m[5]);
+      const label = renderInlineMarkdown(m[4], `${keyPrefix}-al-${idx}`, { ...ctx, inLink: true });
+      nodes.push(
+        href && !ctx.inLink ? (
           <a
             key={`${keyPrefix}-a-${idx++}`}
             href={href}
@@ -332,12 +369,14 @@ function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode {
             rel="noopener noreferrer"
             className="font-medium text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent [overflow-wrap:anywhere]"
           >
-            {m[4]}
+            {label}
           </a>
         ) : (
-          <Fragment key={`${keyPrefix}-at-${idx++}`}>{m[4]}</Fragment>
+          <Fragment key={`${keyPrefix}-at-${idx++}`}>{label}</Fragment>
         ),
       );
+    } else if (/^<br\b/i.test(m[0])) {
+      nodes.push(<br key={`${keyPrefix}-br-${idx++}`} />);
     } else if (m[6] !== undefined) {
       nodes.push(
         <code
@@ -350,11 +389,23 @@ function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode {
     } else if (m[7] !== undefined) {
       nodes.push(
         <strong key={`${keyPrefix}-b-${idx++}`} className="font-semibold text-ink-950">
-          {m[7]}
+          {renderInlineMarkdown(m[7], `${keyPrefix}-bi-${idx}`, ctx)}
         </strong>,
       );
+    } else if (m[8] !== undefined) {
+      nodes.push(
+        <del key={`${keyPrefix}-del-${idx++}`} className="line-through opacity-75">
+          {renderInlineMarkdown(m[8], `${keyPrefix}-di-${idx}`, ctx)}
+        </del>,
+      );
+    } else if (m[9] !== undefined) {
+      nodes.push(
+        <em key={`${keyPrefix}-em-${idx++}`} className="italic">
+          {renderInlineMarkdown(m[9], `${keyPrefix}-ei-${idx}`, ctx)}
+        </em>,
+      );
     } else {
-      const href = isSafeHttpUrl(cleanUrl(m[0]));
+      const href = ctx.inLink ? null : isSafeHttpUrl(cleanUrl(m[0]));
       if (href) {
         const host = hostOf(href);
         nodes.push(
@@ -373,7 +424,7 @@ function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode {
         nodes.push(<Fragment key={`${keyPrefix}-raw-${idx++}`}>{m[0]}</Fragment>);
       }
     }
-    lastIndex = INLINE_TOKEN_RE.lastIndex;
+    lastIndex = re.lastIndex;
   }
 
   if (lastIndex < text.length) {
@@ -382,148 +433,145 @@ function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode {
   return nodes.length ? nodes : text;
 }
 
+const ALIGN_CLASS: Record<"left" | "center" | "right", string> = {
+  left: "text-left",
+  center: "text-center",
+  right: "text-right",
+};
+
 function MarkdownBody({ text }: { text: string }) {
-  const lines = text.split("\n");
-  const blocks: ReactNode[] = [];
-  let i = 0;
+  const parsed = parseMarkdownBlocks(text);
 
-  while (i < lines.length) {
-    const raw = lines[i]!;
-    const trimmed = raw.trim();
-    if (!trimmed) {
-      i += 1;
-      continue;
-    }
-
-    if (trimmed.startsWith("```")) {
-      const codeLines: string[] = [];
-      i += 1;
-      while (i < lines.length && !lines[i]!.trim().startsWith("```")) {
-        codeLines.push(lines[i]!);
-        i += 1;
-      }
-      if (i < lines.length) i += 1;
-      blocks.push(<CodeBlock key={`cb-${blocks.length}`} code={codeLines.join("\n")} />);
-      continue;
-    }
-
-    const headingMatch = /^(#{1,4})\s+(.+)$/.exec(trimmed);
-    if (headingMatch) {
-      const level = headingMatch[1]!.length;
-      const content = renderInlineMarkdown(headingMatch[2]!, `h-${blocks.length}`);
-      if (level === 1) {
-        blocks.push(
-          <h1 key={`h-${blocks.length}`} className="mt-5 mb-2 text-[17px] font-bold leading-snug text-ink-950">
-            {content}
-          </h1>,
-        );
-      } else if (level === 2) {
-        blocks.push(
-          <h2 key={`h-${blocks.length}`} className="mt-4 mb-1.5 text-[15px] font-bold leading-snug text-ink-950">
-            {content}
-          </h2>,
-        );
-      } else {
-        blocks.push(
-          <h3 key={`h-${blocks.length}`} className="mt-3.5 mb-1 text-[14px] font-semibold leading-snug text-ink-950">
-            {content}
-          </h3>,
-        );
-      }
-      i += 1;
-      continue;
-    }
-
-    if (/^(?:---+|\*\*\*+)$/.test(trimmed)) {
-      blocks.push(<hr key={`hr-${blocks.length}`} className="my-4 border-ink-200" />);
-      i += 1;
-      continue;
-    }
-
-    if (trimmed.startsWith(">")) {
-      const quoteLines: string[] = [];
-      while (i < lines.length && lines[i]!.trim().startsWith(">")) {
-        quoteLines.push(lines[i]!.trim().replace(/^>\s?/, ""));
-        i += 1;
-      }
-      blocks.push(
-        <blockquote
-          key={`bq-${blocks.length}`}
-          className="my-3 rounded-r-lg border-l-[3px] border-brand-border bg-brand-subtle/30 py-2 pr-3 pl-3.5 text-[13px] leading-[1.75] text-ink-700 [overflow-wrap:anywhere]"
-        >
-          {quoteLines.map((ql, idx) => (
-            <p key={idx} className="my-0.5">
-              {renderInlineMarkdown(ql, `bq-${blocks.length}-${idx}`)}
-            </p>
-          ))}
-        </blockquote>,
-      );
-      continue;
-    }
-
-    if (/^[-•*]\s+/.test(trimmed)) {
-      const items: string[] = [];
-      while (i < lines.length && /^[-•*]\s+/.test(lines[i]!.trim())) {
-        items.push(lines[i]!.trim().replace(/^[-•*]\s+/, ""));
-        i += 1;
-      }
-      blocks.push(
-        <ul key={`ul-${blocks.length}`} className="my-2.5 list-disc space-y-1.5 pl-5 text-[13.5px] leading-[1.75] text-ink-800">
-          {items.map((it, idx) => (
-            <li key={idx} className="min-w-0 [overflow-wrap:anywhere] break-words">
-              {renderInlineMarkdown(it, `ul-${blocks.length}-${idx}`)}
-            </li>
-          ))}
-        </ul>,
-      );
-      continue;
-    }
-
-    if (/^\d+[.、)）]\s+/.test(trimmed)) {
-      const items: string[] = [];
-      while (i < lines.length && /^\d+[.、)）]\s+/.test(lines[i]!.trim())) {
-        items.push(lines[i]!.trim().replace(/^\d+[.、)）]\s+/, ""));
-        i += 1;
-      }
-      blocks.push(
-        <ol key={`ol-${blocks.length}`} className="my-2.5 list-decimal space-y-1.5 pl-5 text-[13.5px] leading-[1.75] text-ink-800">
-          {items.map((it, idx) => (
-            <li key={idx} className="min-w-0 [overflow-wrap:anywhere] break-words">
-              {renderInlineMarkdown(it, `ol-${blocks.length}-${idx}`)}
-            </li>
-          ))}
-        </ol>,
-      );
-      continue;
-    }
-
-    const paraLines: string[] = [];
-    while (
-      i < lines.length &&
-      lines[i]!.trim() !== "" &&
-      !lines[i]!.trim().startsWith("```") &&
-      !/^(#{1,4})\s+/.test(lines[i]!.trim()) &&
-      !lines[i]!.trim().startsWith(">") &&
-      !/^[-•*]\s+/.test(lines[i]!.trim()) &&
-      !/^\d+[.、)）]\s+/.test(lines[i]!.trim()) &&
-      !/^(?:---+|\*\*\*+)$/.test(lines[i]!.trim())
-    ) {
-      paraLines.push(lines[i]!.trim());
-      i += 1;
-    }
-    blocks.push(
-      <p key={`p-${blocks.length}`} className="my-2.5 text-[13.5px] leading-[1.8] text-ink-800 [overflow-wrap:anywhere] break-words">
-        {paraLines.map((pl, idx) => (
-          <Fragment key={idx}>
-            {idx > 0 && <br />}
-            {renderInlineMarkdown(pl, `p-${blocks.length}-${idx}`)}
-          </Fragment>
-        ))}
-      </p>,
-    );
-  }
-
-  return <div className="min-w-0 [overflow-wrap:anywhere]">{blocks}</div>;
+  return (
+    <div className="min-w-0 [overflow-wrap:anywhere]">
+      {parsed.map((block, idx) => {
+        switch (block.type) {
+          case "code":
+            return <CodeBlock key={`cb-${idx}`} code={block.code} />;
+          case "heading": {
+            const content = renderInlineMarkdown(block.text, `h-${idx}`);
+            if (block.level === 1) {
+              return (
+                <h1 key={`h-${idx}`} className="mt-5 mb-2 text-[17px] font-bold leading-snug text-ink-950">
+                  {content}
+                </h1>
+              );
+            }
+            if (block.level === 2) {
+              return (
+                <h2 key={`h-${idx}`} className="mt-4 mb-1.5 text-[15px] font-bold leading-snug text-ink-950">
+                  {content}
+                </h2>
+              );
+            }
+            if (block.level === 3) {
+              return (
+                <h3 key={`h-${idx}`} className="mt-3.5 mb-1 text-[14px] font-semibold leading-snug text-ink-950">
+                  {content}
+                </h3>
+              );
+            }
+            return (
+              <h4 key={`h-${idx}`} className="mt-3 mb-1 text-[13.5px] font-semibold text-ink-900">
+                {content}
+              </h4>
+            );
+          }
+          case "hr":
+            return <hr key={`hr-${idx}`} className="my-4 border-ink-200" />;
+          case "table":
+            return (
+              <div key={`tbl-${idx}`} className="my-3 max-w-full overflow-x-auto rounded-lg border border-ink-200">
+                <table className="min-w-full border-collapse text-left text-[12px] text-ink-800">
+                  <thead className="bg-surface-hover font-semibold text-ink-950">
+                    <tr className="border-b border-ink-200">
+                      {block.headers.map((header, colIdx) => (
+                        <th
+                          key={`th-${colIdx}`}
+                          className={`border-r border-ink-200 px-3 py-2 whitespace-nowrap last:border-r-0 ${ALIGN_CLASS[block.aligns[colIdx] ?? "left"]}`}
+                        >
+                          {renderInlineMarkdown(header, `tbl-${idx}-h-${colIdx}`, { inTable: true })}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {block.rows.map((row, rowIdx) => (
+                      <tr key={`tr-${rowIdx}`} className="border-b border-ink-200 last:border-b-0">
+                        {row.map((cell, colIdx) => (
+                          <td
+                            key={`td-${colIdx}`}
+                            className={`min-w-[110px] border-r border-ink-200 px-3 py-2 align-top leading-relaxed last:border-r-0 [overflow-wrap:anywhere] ${ALIGN_CLASS[block.aligns[colIdx] ?? "left"]}`}
+                          >
+                            {renderInlineMarkdown(cell, `tbl-${idx}-r-${rowIdx}-c-${colIdx}`, { inTable: true })}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          case "blockquote":
+            return (
+              <blockquote
+                key={`bq-${idx}`}
+                className="my-3 rounded-r-lg border-l-[3px] border-brand-border bg-brand-subtle/30 py-2 pr-3 pl-3.5 text-[13px] leading-[1.75] text-ink-700 [overflow-wrap:anywhere]"
+              >
+                {block.lines.map((ql, lineIdx) => (
+                  <p key={lineIdx} className="my-0.5">
+                    {renderInlineMarkdown(ql, `bq-${idx}-${lineIdx}`)}
+                  </p>
+                ))}
+              </blockquote>
+            );
+          case "ul":
+            return (
+              <ul key={`ul-${idx}`} className="my-2.5 list-disc space-y-1.5 pl-5 text-[13.5px] leading-[1.75] text-ink-800">
+                {block.items.map((it, itemIdx) => (
+                  <li
+                    key={itemIdx}
+                    className={`min-w-0 [overflow-wrap:anywhere] break-words ${it.checked !== undefined ? "list-none -ml-4 flex items-start gap-2" : ""}`}
+                  >
+                    {it.checked !== undefined && (
+                      <input
+                        type="checkbox"
+                        checked={it.checked}
+                        readOnly
+                        aria-label={it.text}
+                        className="mt-1.5 h-3.5 w-3.5 shrink-0 accent-accent"
+                      />
+                    )}
+                    <span className="min-w-0">{renderInlineMarkdown(it.text, `ul-${idx}-${itemIdx}`)}</span>
+                  </li>
+                ))}
+              </ul>
+            );
+          case "ol":
+            return (
+              <ol key={`ol-${idx}`} className="my-2.5 list-decimal space-y-1.5 pl-5 text-[13.5px] leading-[1.75] text-ink-800">
+                {block.items.map((it, itemIdx) => (
+                  <li key={itemIdx} className="min-w-0 [overflow-wrap:anywhere] break-words">
+                    {renderInlineMarkdown(it, `ol-${idx}-${itemIdx}`)}
+                  </li>
+                ))}
+              </ol>
+            );
+          case "paragraph":
+            return (
+              <p key={`p-${idx}`} className="my-2.5 text-[13.5px] leading-[1.8] text-ink-800 [overflow-wrap:anywhere] break-words">
+                {block.lines.map((pl, lineIdx) => (
+                  <Fragment key={lineIdx}>
+                    {lineIdx > 0 && <br />}
+                    {renderInlineMarkdown(pl, `p-${idx}-${lineIdx}`)}
+                  </Fragment>
+                ))}
+              </p>
+            );
+        }
+      })}
+    </div>
+  );
 }
 
 function RichBody({ content }: { content: string }) {
@@ -585,7 +633,7 @@ export function SnapshotContent({ content }: { content: string }) {
                   </span>
                 )}
                 <span className="[overflow-wrap:anywhere] break-words">
-                  {looksLikeHtml(cm.body) ? <HtmlBody html={cm.body} /> : renderBareUrls(cm.body, `cm-${idx}`)}
+                  {looksLikeHtml(cm.body) ? <HtmlBody html={cm.body} /> : renderInlineMarkdown(cm.body, `cm-${idx}`)}
                 </span>
               </div>
             ))}
