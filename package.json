@@ -28,6 +28,7 @@
     "scys:tools": "tsx scripts/scys-auth.ts --tools",
     "scys:backfill": "tsx scripts/scys-backfill.ts",
     "scys:manuals": "tsx scripts/scys-manuals-backfill.ts",
+    "scys:comments": "tsx scripts/scys-comments-backfill.ts",
     "scys:burn": "tsx scripts/scys-burn.ts",
     "scys:reclassify": "tsx scripts/scys-reclassify.ts"
   },

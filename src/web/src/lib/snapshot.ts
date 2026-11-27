@@ -1,6 +1,10 @@
 export type SnapshotComment = {
   author?: string;
+  isAuthor?: boolean;
+  likes?: number;
+  replyTo?: string;
   body: string;
+  replies?: SnapshotComment[];
 };
 
 export type SnapshotSections = {
@@ -268,6 +272,99 @@ export function isSummaryCoveredByContent(summary: string | null | undefined, co
   return c.length >= 400 && (s.endsWith("...") || s.endsWith("…"));
 }
 
+const STRUCTURED_COMMENT_START_RE = /^💬\s+(.*)$/;
+const STRUCTURED_REPLY_START_RE = /^\s*↳\s+(.*)$/;
+const STRUCTURED_HEADER_RE =
+  /^([^:\n：[\]]{1,32}?)(?:\s*\[([^\]]{1,24})\])?(?:\s+回复\s+([^:\n：[\]]{1,32}?))?\s*[:：]\s*([\s\S]*)$/;
+
+function parseStructuredCommentHeader(firstLine: string): SnapshotComment {
+  const trimmed = firstLine.trim();
+  const hm = STRUCTURED_HEADER_RE.exec(trimmed);
+  if (!hm || /^https?$/i.test(hm[1]!.trim())) {
+    return { body: trimmed };
+  }
+  const out: SnapshotComment = {
+    author: hm[1]!.trim(),
+    body: (hm[4] ?? "").trim(),
+  };
+  const badgeRaw = hm[2]?.trim() ?? "";
+  if (badgeRaw) {
+    if (/楼主/.test(badgeRaw)) out.isAuthor = true;
+    const likeMatch = /👍\s*(\d+)/u.exec(badgeRaw);
+    if (likeMatch) {
+      const n = Number(likeMatch[1]);
+      if (Number.isFinite(n) && n > 0) out.likes = n;
+    }
+  }
+  const replyTarget = hm[3]?.trim() ?? "";
+  if (replyTarget) {
+    out.replyTo = replyTarget;
+  }
+  return out;
+}
+
+function finalizeStructuredComment(cm: SnapshotComment): SnapshotComment | null {
+  cm.body = cm.body.trim();
+  if (cm.replies?.length) {
+    cm.replies = cm.replies.map((r) => ({ ...r, body: r.body.trim() })).filter((r) => Boolean(r.body));
+    if (!cm.replies.length) delete cm.replies;
+  }
+  return cm.body || cm.replies?.length ? cm : null;
+}
+
+function parseCommentsBlock(chunk: string): SnapshotComment[] {
+  if (!/^💬\s+/m.test(chunk)) {
+    return chunk
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line): SnapshotComment => {
+        const cm = /^([^:\n：]{1,32})[:：]\s*(.+)$/.exec(line);
+        if (cm && !/^https?$/i.test(cm[1]!)) {
+          return { author: cm[1]!.trim(), body: cm[2]!.trim() };
+        }
+        return { body: line };
+      });
+  }
+
+  const out: SnapshotComment[] = [];
+  let current: SnapshotComment | null = null;
+  for (const line of chunk.split("\n")) {
+    const topMatch = STRUCTURED_COMMENT_START_RE.exec(line);
+    if (topMatch) {
+      if (current) {
+        const done = finalizeStructuredComment(current);
+        if (done) out.push(done);
+      }
+      current = parseStructuredCommentHeader(topMatch[1]!);
+      continue;
+    }
+
+    if (!current) continue;
+
+    const replyMatch = STRUCTURED_REPLY_START_RE.exec(line);
+    if (replyMatch) {
+      if (!current.replies) current.replies = [];
+      current.replies.push(parseStructuredCommentHeader(replyMatch[1]!));
+      continue;
+    }
+
+    if (current.replies && current.replies.length > 0) {
+      const lastReply = current.replies[current.replies.length - 1]!;
+      const dedented = line.replace(/^\s{2,4}/, "");
+      lastReply.body = lastReply.body ? `${lastReply.body}\n${dedented}` : dedented;
+    } else {
+      current.body = current.body ? `${current.body}\n${line}` : line;
+    }
+  }
+
+  if (current) {
+    const done = finalizeStructuredComment(current);
+    if (done) out.push(done);
+  }
+  return out;
+}
+
 /** 拆出可选顶部元信息头、主正文，以及尾部的飞书文档/关联文档/精选评论附加板块。 */
 export function parseSnapshotSections(raw: string): SnapshotSections {
   let working = raw.replace(/\r\n/g, "\n").trim();
@@ -320,18 +417,7 @@ export function parseSnapshotSections(raw: string): SnapshotSections {
             .filter(Boolean),
         );
       } else if (/^精选/.test(cur.kind)) {
-        const parsedComments = chunk
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean)
-          .map((line): SnapshotComment => {
-            const cm = /^([^:\n：]{1,32})[:：]\s*(.+)$/.exec(line);
-            if (cm && !/^https?$/i.test(cm[1]!)) {
-              return { author: cm[1]!.trim(), body: cm[2]!.trim() };
-            }
-            return { body: line };
-          });
-        comments = comments.concat(parsedComments);
+        comments = comments.concat(parseCommentsBlock(chunk));
       }
     }
   }

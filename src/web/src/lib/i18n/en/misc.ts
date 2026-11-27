@@ -135,6 +135,8 @@ export const EN_MISC: Record<string, string> = {
   "飞书文档内容": "Feishu doc",
   "关联文档": "Related docs",
   "精选评论": "Featured comments",
+  "楼主": "Author",
+  "回复": "replied to",
   "上游重大更新": "Upstream major update",
   "领先 {n} 个提交": "{n} commits ahead",
   "查看详情": "Details",

@@ -9,6 +9,7 @@ import {
   Copy,
   Eye,
   EyeOff,
+  RefreshCw,
   ShieldAlert,
   Sparkles,
   Star,
@@ -666,6 +667,7 @@ export function ItemDetailDrawer({
   onClassificationSave,
   canAdmin = false,
   onDossierUpdated,
+  onContentUpdated,
   onNotify,
 }: {
   item: Item;
@@ -684,6 +686,7 @@ export function ItemDetailDrawer({
   onClassificationSave?: (id: number, patch: ClassificationPatch) => Promise<void>;
   canAdmin?: boolean;
   onDossierUpdated?: (itemId: number, dossier: ItemDossier) => void;
+  onContentUpdated?: (itemId: number, content: string) => void;
   onNotify?: (message: string) => void;
 }) {
   const exp = expiresLabel(item.expires_at);
@@ -691,11 +694,52 @@ export function ItemDetailDrawer({
   const dialogRef = useRef<HTMLElement | null>(null);
   const [snapshotOpen, setSnapshotOpen] = useState(true);
   const [summaryOpen, setSummaryOpen] = useState(false);
+  const [syncingComments, setSyncingComments] = useState(false);
+
+  const canSyncScysComments =
+    canAdmin &&
+    (/^scys-topic-/.test(item.external_id || "") ||
+      (item.source_id.startsWith("scys-") && item.source_id !== "scys-projects" && item.source_id !== "scys-manuals"));
 
   useEffect(() => {
     setSnapshotOpen(true);
     setSummaryOpen(false);
+    setSyncingComments(false);
   }, [item.id]);
+
+  const handleSyncComments = async () => {
+    if (syncingComments) return;
+    setSyncingComments(true);
+    try {
+      const res = await fetch(`/api/items/${item.id}/sync-comments`, { method: "POST" });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        totalComments?: number;
+        keptComments?: number;
+        content?: string;
+      };
+      if (!res.ok || data.ok === false) {
+        onNotify?.(data.error ?? t("同步评论失败，请稍后重试"));
+        return;
+      }
+      if (typeof data.content === "string" && data.content) {
+        onContentUpdated?.(item.id, data.content);
+        setSnapshotOpen(true);
+      }
+      const kept = data.keptComments ?? 0;
+      const total = data.totalComments ?? 0;
+      onNotify?.(
+        kept > 0
+          ? t("已同步 {kept} 条精选评论（原帖共 {total} 条）", { kept, total })
+          : t("同步完成，原帖暂无有效评论"),
+      );
+    } catch {
+      onNotify?.(t("同步评论失败，请稍后重试"));
+    } finally {
+      setSyncingComments(false);
+    }
+  };
 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -893,7 +937,7 @@ export function ItemDetailDrawer({
             );
           })()}
 
-          {item.content && item.content !== item.summary && (
+          {item.content && item.content !== item.summary ? (
             <div className="min-w-0 rounded-xl border border-ink-200 bg-surface-hover p-4 sm:p-5">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-ink-200/80 pb-2.5">
                 <div className="flex flex-wrap items-center gap-2">
@@ -902,18 +946,45 @@ export function ItemDetailDrawer({
                     {t("{n} 字", { n: plainCharCount(item.content) })}
                   </span>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setSnapshotOpen((v) => !v)}
-                  className="inline-flex items-center gap-1 text-[12px] font-medium text-accent hover:underline"
-                >
-                  {snapshotOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                  {snapshotOpen ? t("收起") : t("展开")}
-                </button>
+                <div className="flex items-center gap-2.5">
+                  {canSyncScysComments && (
+                    <button
+                      type="button"
+                      disabled={syncingComments}
+                      onClick={() => void handleSyncComments()}
+                      title={t("从生财 MCP 实时拉取楼主补充与高赞评论")}
+                      className="inline-flex items-center gap-1 rounded-md border border-ink-200 bg-surface px-2 py-1 text-[11.5px] font-medium text-ink-700 transition-colors hover:bg-ink-100 hover:text-ink-950 disabled:opacity-50"
+                    >
+                      <RefreshCw size={11} className={syncingComments ? "animate-spin" : ""} />
+                      {syncingComments ? t("同步中…") : t("同步最新评论")}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setSnapshotOpen((v) => !v)}
+                    className="inline-flex items-center gap-1 text-[12px] font-medium text-accent hover:underline"
+                  >
+                    {snapshotOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                    {snapshotOpen ? t("收起") : t("展开")}
+                  </button>
+                </div>
               </div>
               {snapshotOpen && <SnapshotContent content={item.content} />}
             </div>
-          )}
+          ) : canSyncScysComments && !loading ? (
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-ink-200 bg-surface-hover px-3.5 py-2.5 text-[12px]">
+              <span className="text-ink-600">{t("从生财 MCP 实时拉取楼主补充与高赞评论")}</span>
+              <button
+                type="button"
+                disabled={syncingComments}
+                onClick={() => void handleSyncComments()}
+                className="inline-flex shrink-0 items-center gap-1 rounded-md border border-ink-200 bg-surface px-2.5 py-1 text-[12px] font-medium text-ink-800 hover:bg-ink-100 disabled:opacity-50"
+              >
+                <RefreshCw size={12} className={syncingComments ? "animate-spin" : ""} />
+                {syncingComments ? t("同步中…") : t("同步最新评论")}
+              </button>
+            </div>
+          ) : null}
 
           <dl className="grid grid-cols-2 gap-3 rounded-lg border border-ink-200 bg-surface-hover p-3.5 text-[12px]">
             <div>

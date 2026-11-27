@@ -579,6 +579,18 @@ function RichBody({ content }: { content: string }) {
   return looksLikeHtml(content) ? <HtmlBody html={content} /> : <MarkdownBody text={content} />;
 }
 
+function CommentText({ body, keyPrefix }: { body: string; keyPrefix: string }) {
+  const trimmed = body.trim();
+  if (!trimmed) return null;
+  if (looksLikeHtml(trimmed)) {
+    return <HtmlBody html={trimmed} />;
+  }
+  if (trimmed.includes("\n") || /!\[[^\]]*\]\(https?:\/\//.test(trimmed) || /^```/m.test(trimmed)) {
+    return <MarkdownBody text={trimmed} />;
+  }
+  return <span className="[overflow-wrap:anywhere] break-words">{renderInlineMarkdown(trimmed, keyPrefix)}</span>;
+}
+
 export function SnapshotContent({ content }: { content: string }) {
   const { metaLine, body, feishuDoc, relatedDocs, comments } = parseSnapshotSections(content);
 
@@ -619,22 +631,74 @@ export function SnapshotContent({ content }: { content: string }) {
       )}
 
       {comments.length > 0 && (
-        <section className="min-w-0 space-y-2 border-t border-ink-200 pt-3">
+        <section className="min-w-0 space-y-2.5 border-t border-ink-200 pt-3">
           <h4 className="flex items-center gap-1.5 text-[12px] font-semibold text-ink-800">
             <MessageSquareText size={13} />
-            {t("精选评论")}
+            <span>{t("精选评论")}</span>
+            <span className="rounded bg-ink-100 px-1.5 py-0.5 font-mono text-[11px] font-medium text-ink-600">
+              {comments.length}
+            </span>
           </h4>
-          <div className="space-y-2">
+          <div className="space-y-2.5">
             {comments.map((cm, idx) => (
-              <div key={idx} className="min-w-0 rounded-lg border border-ink-200 bg-surface p-3 text-[12.5px] leading-relaxed text-ink-800">
-                {cm.author && (
-                  <span className="mr-2 inline-flex items-center rounded bg-brand-subtle px-1.5 py-0.5 text-[11px] font-semibold text-accent">
-                    {cm.author}
-                  </span>
+              <div
+                key={idx}
+                className={
+                  "min-w-0 rounded-lg border p-3 text-[12.5px] leading-relaxed text-ink-800 " +
+                  (cm.isAuthor ? "border-brand-border/80 bg-brand-subtle/20" : "border-ink-200 bg-surface")
+                }
+              >
+                {(cm.author || cm.isAuthor || (cm.likes ?? 0) > 0) && (
+                  <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+                    {cm.author && (
+                      <span className="inline-flex items-center rounded bg-brand-subtle px-1.5 py-0.5 text-[11px] font-semibold text-accent">
+                        {cm.author}
+                      </span>
+                    )}
+                    {cm.isAuthor && (
+                      <span className="inline-flex items-center rounded border border-code-border bg-code-subtle px-1.5 py-0.5 text-[10.5px] font-semibold text-code">
+                        {t("楼主")}
+                      </span>
+                    )}
+                    {typeof cm.likes === "number" && cm.likes > 0 && (
+                      <span className="inline-flex items-center rounded bg-ink-100 px-1.5 py-0.5 font-mono text-[10.5px] text-ink-600">
+                        👍 {cm.likes}
+                      </span>
+                    )}
+                  </div>
                 )}
-                <span className="[overflow-wrap:anywhere] break-words">
-                  {looksLikeHtml(cm.body) ? <HtmlBody html={cm.body} /> : renderInlineMarkdown(cm.body, `cm-${idx}`)}
-                </span>
+
+                <div className="min-w-0 [overflow-wrap:anywhere] break-words">
+                  <CommentText body={cm.body} keyPrefix={`cm-${idx}`} />
+                </div>
+
+                {cm.replies && cm.replies.length > 0 && (
+                  <div className="mt-2.5 space-y-2 border-l-2 border-ink-200 pl-3">
+                    {cm.replies.map((rp, rIdx) => (
+                      <div key={rIdx} className="min-w-0 text-[12px] leading-relaxed text-ink-700">
+                        <div className="mb-0.5 flex flex-wrap items-center gap-1.5">
+                          {rp.author && <span className="font-semibold text-ink-900">{rp.author}</span>}
+                          {rp.isAuthor && (
+                            <span className="inline-flex items-center rounded border border-code-border bg-code-subtle px-1 py-px text-[10px] font-semibold text-code">
+                              {t("楼主")}
+                            </span>
+                          )}
+                          {rp.replyTo && (
+                            <span className="text-[11px] text-ink-500">
+                              {t("回复")} <span className="font-medium text-ink-700">{rp.replyTo}</span>
+                            </span>
+                          )}
+                          {typeof rp.likes === "number" && rp.likes > 0 && (
+                            <span className="font-mono text-[10.5px] text-ink-500">👍 {rp.likes}</span>
+                          )}
+                        </div>
+                        <div className="min-w-0 [overflow-wrap:anywhere] break-words">
+                          <CommentText body={rp.body} keyPrefix={`cm-${idx}-r-${rIdx}`} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
           </div>

@@ -147,3 +147,50 @@ test("parseMarkdownBlocks 支持 H5/H6 标题、GFM 表格对齐/转义与任务
     ],
   });
 });
+
+test("parseSnapshotSections 支持多段换行评论、楼主与点赞徽章及楼中楼二级回复且不误拆冒号行", () => {
+  const raw = [
+    "主帖正文第一段",
+    "",
+    "【精选评论】",
+    "💬 欢乐马 [楼主·👍3]: 作者补充两条实操细节：",
+    "",
+    "第一步：用 Scamalytics 查欺诈分",
+    "第二步：确认节点地区与账单地址一致",
+    "",
+    "![](https://scys.com/img/step3.png)",
+    "💬 逸尘: 老大，这个上传上去就是默认商用授权嘛",
+    "  ↳ 亦仁 [楼主·👍2] 回复 逸尘: 还没考虑过这个，有啥建议吗",
+    "    后续可以做付费 Skill 授权",
+  ].join("\n");
+
+  const parsed = parseSnapshotSections(raw);
+  assert.equal(parsed.body, "主帖正文第一段");
+  assert.equal(parsed.comments.length, 2);
+  assert.deepEqual(parsed.comments[0], {
+    author: "欢乐马",
+    isAuthor: true,
+    likes: 3,
+    body: [
+      "作者补充两条实操细节：",
+      "",
+      "第一步：用 Scamalytics 查欺诈分",
+      "第二步：确认节点地区与账单地址一致",
+      "",
+      "![](https://scys.com/img/step3.png)",
+    ].join("\n"),
+  });
+  assert.deepEqual(parsed.comments[1], {
+    author: "逸尘",
+    body: "老大，这个上传上去就是默认商用授权嘛",
+    replies: [
+      {
+        author: "亦仁",
+        isAuthor: true,
+        likes: 2,
+        replyTo: "逸尘",
+        body: "还没考虑过这个，有啥建议吗\n后续可以做付费 Skill 授权",
+      },
+    ],
+  });
+});

@@ -58,6 +58,7 @@ import {
   markSourceFailure,
   runSource,
 } from "./collectors/index.ts";
+import { syncScysItemComments } from "./collectors/scys.ts";
 import type { RawItem } from "./collectors/types.ts";
 import { lastDigests, runDaily, runWeekly } from "./digest.ts";
 import { validateDigestReport, type DigestReport } from "../shared/digest.ts";
@@ -958,6 +959,17 @@ const fetchLimit = Math.min(Math.max(offset + limit * 3, 240), 600);
     try {
       const dossier = await generateItemDossier(itemId, { force: true });
       return c.json({ ok: true, dossier });
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  });
+  app.post("/api/items/:id/sync-comments", async (c) => {
+    const itemId = Number(c.req.param("id"));
+    if (!Number.isSafeInteger(itemId) || itemId < 1) return c.json({ error: "条目 ID 无效" }, 400);
+    if (!get("SELECT id FROM items WHERE id = ?", itemId)) return c.json({ error: "资源不存在" }, 404);
+    try {
+      const synced = await syncScysItemComments(itemId);
+      return c.json({ ok: true, ...synced });
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
     }

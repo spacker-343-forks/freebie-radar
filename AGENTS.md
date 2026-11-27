@@ -41,7 +41,7 @@
 | 模块路径 | 职责说明 |
 | :--- | :--- |
 | `src/server/scys/mcp-client.ts`<br>`scripts/scys-auth.ts` | 生财 MCP (`https://mcp.scys.com/shengcai-web/mcp`) Stateless Streamable HTTP 客户端、OAuth 2.1 + PKCE + DCR 登录续签、`Mcp-Session-Id` 过期重连及多槽位并发连接池（存于 `settings.scys_mcp_auth`）。 |
-| `src/server/collectors/scys.ts` | 生财两阶段采集器（Stage 1 列表检索 + Stage 2 并发详情补全），支持 50 万字无损归档与旧版 `8,000` 字截断记录自动重抓自愈。 |
+| `src/server/collectors/scys.ts`<br>`src/server/scys/comment-ai.ts` | 生财两阶段采集器（Stage 1 列表检索 + Stage 2 并发详情与 `pageTopicComment` 评论补全），内置「0 Token 规则预筛 + `gpt-6.1-terra:medium` 批量语义脱水」两级评论精选漏斗、评论数增长增量回访（独立幂等表 `scys_comment_sync`）及旧版 `8,000` 字截断记录自动重抓自愈。 |
 | `src/server/enrich/ai-settings.ts` | 支持 `<model>:<effort>`（如 `gpt-6.2-sol:high`，自动映射 `reasoning_effort` 并省略 `temperature`）、HTML 标签清洗与 6,000 字送审窗口、主端点配额耗尽自动 6h 熔断切换至 `AI_FALLBACK_BASE_URL`、以及深度模型路由 `resolveDeepModel`。 |
 | `src/shared/digest.ts`<br>`src/server/digest.ts`<br>`src/web/src/components/DigestPanel.tsx` | AI 主编结构化每日精选与周报（独立拆分 `threshold` 底牌门槛字段、候选池真实链接覆写防幻觉、兼容解析旧版纯文本、移动端「站内读全文 + 生财原帖」双胶囊）。 |
 | `src/web/src/lib/snapshot.ts`<br>`src/web/src/components/SnapshotContent.tsx` | 零 XSS 白名单正文快照阅读器：自动识别生财 Tiptap HTML 与 Markdown，渲染标题、图文、可复制代码块、飞书文档与精选评论卡片。 |
@@ -67,6 +67,7 @@ pnpm scys:preset        # 幂等初始化生财数据源开关、脱水 Prompt�
 pnpm scys:reclassify    # 0 Token 幂等存量商业赛道分类重映射与假截止时间/兑换码清洗
 pnpm scys:backfill      # 多分区分页历史回溯与流式 AI 脱水（支持断点续跑）
 pnpm scys:manuals       # 遍历历期大航海目录，无损抓取全部实战手册章节（支持偏移续传）
+pnpm scys:comments      # 高并发批量补抓存量生财帖评论区（楼主补充/楼中楼追答/高赞实测，支持断点续跑与 --id 单帖同步）
 pnpm scys:burn          # 批量合成《赛道实战白皮书》(--tracks) 与《实战立项拆解书》(--dossiers)
 ```
 

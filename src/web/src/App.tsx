@@ -1949,6 +1949,9 @@ export function App() {
               items: current.items.map((it) => it.id === id ? { ...it, hasDossier: true, dossier } : it),
             } : current);
           }}
+          onContentUpdated={(id, content) => {
+            setDetail((current) => current?.id === id ? { ...current, content } : current);
+          }}
         />
       )}
 
