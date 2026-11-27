@@ -26,7 +26,9 @@
     "scys:auth": "tsx scripts/scys-auth.ts",
     "scys:preset": "tsx scripts/scys-preset.ts",
     "scys:tools": "tsx scripts/scys-auth.ts --tools",
-    "scys:backfill": "tsx scripts/scys-backfill.ts"
+    "scys:backfill": "tsx scripts/scys-backfill.ts",
+    "scys:manuals": "tsx scripts/scys-manuals-backfill.ts",
+    "scys:burn": "tsx scripts/scys-burn.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.4",
