@@ -1,4 +1,4 @@
-export const TABS = ["feed", "tracks", "hot", "digest", "me", "rules", "push", "ai", "ops", "site", "admin"] as const;
+export const TABS = ["feed", "chats", "tracks", "hot", "digest", "me", "rules", "push", "ai", "ops", "site", "admin"] as const;
 export type Tab = typeof TABS[number];
 export type WorkspaceScope = "personal" | "site";
 

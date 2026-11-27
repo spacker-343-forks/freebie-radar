@@ -23,6 +23,7 @@ import { EN_AI } from "./i18n/en/ai.ts";
 import { EN_USERPUSH } from "./i18n/en/userpush.ts";
 import { EN_ADMIN } from "./i18n/en/admin.ts";
 import { EN_MISC } from "./i18n/en/misc.ts";
+import { EN_MANUALS_CHATS } from "./i18n/en/manuals-chats.ts";
 
 export type Lang = "zh" | "en";
 
@@ -44,6 +45,7 @@ const EN: Record<string, string> = {
   ...EN_OPS,
   ...EN_AI,
   ...EN_USERPUSH,
+  ...EN_MANUALS_CHATS,
 };
 
 function isLang(value: unknown): value is Lang {

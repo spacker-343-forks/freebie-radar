@@ -34,6 +34,7 @@ import {
   Globe2,
   Github,
   BookOpen,
+  MessageSquareText,
   MoreHorizontal,
   LogOut,
   Flag,
@@ -71,6 +72,8 @@ import { KIND_LABEL, KIND_ORDER, OBTAIN_HINT, OBTAIN_LABEL, SOURCE_GROUPS, categ
 
 // 管理区 / 次要 Tab 的大面板按需加载：首屏只发资源流真正要用的代码
 const DigestPanel = lazy(async () => ({ default: (await import("./components/DigestPanel.tsx")).DigestPanel }));
+const ManualsPanel = lazy(async () => ({ default: (await import("./components/ManualsPanel.tsx")).ManualsPanel }));
+const ChatRadarPanel = lazy(async () => ({ default: (await import("./components/ChatRadarPanel.tsx")).ChatRadarPanel }));
 const TracksPanel = lazy(async () => ({ default: (await import("./components/TracksPanel.tsx")).TracksPanel }));
 const HotPanel = lazy(async () => ({ default: (await import("./components/HotPanel.tsx")).HotPanel }));
 const RulesPanel = lazy(async () => ({ default: (await import("./components/RulesPanel.tsx")).RulesPanel }));
@@ -363,6 +366,8 @@ export function App() {
   const [obtain, setObtain] = useState(initialFeed.obtain);
   const [kindFilter, setKindFilter] = useState(initialFeed.kindFilter);
   const [preset, setPreset] = useState(initialFeed.preset);
+  const [manualTargetActivityId, setManualTargetActivityId] = useState<string | null>(null);
+  const [chatTarget, setChatTarget] = useState<{ activityId?: string | null; groupKey?: string | null }>({});
   const [viewMode, setViewMode] = useState<"compact" | "grid2" | "grid3">(() => {
     if (typeof localStorage === "undefined") return "compact";
     const saved = localStorage.getItem("radar_view_mode");
@@ -479,6 +484,7 @@ export function App() {
   }, [tab, preset, syncChannelScroll]);
 
   const switchPreset = useCallback((nextKey: string) => {
+    if (nextKey === "manuals") setManualTargetActivityId(null);
     setPreset(nextKey);
     setKindFilter("auto");
     setObtain("auto");
@@ -521,7 +527,10 @@ export function App() {
   const stats = useApi<Stats>(statsQuery ? `/api/stats?${statsQuery}` : "/api/stats", identityScope);
   const guestIds = guestMode && (preset === "starred" || preset === "hidden")
     ? `&ids=${(preset === "starred" ? guest.starred : guest.hidden).slice(0, 100).join(",") || "0"}` : "";
-  const items = useApi<{ total: number; items: Item[] }>(`/api/items?${query}${guestIds}`, identityScope);
+  const items = useApi<{ total: number; items: Item[] }>(
+    preset === "manuals" ? null : `/api/items?${query}${guestIds}`,
+    identityScope,
+  );
   // A workspace is explicit; administrator authentication never replaces personal settings.
   const effectiveScope = configurationScope(workspaceScope, isPublicSite, Boolean(me));
   const rulesBase = bootData ? configurationBase(workspaceScope, isPublicSite, Boolean(me), adminReady) : null;
@@ -763,9 +772,12 @@ export function App() {
     sources: enabledSources.filter((s) => groupOfSource(s) === g.key),
   })).filter((g) => g.sources.length > 0);
 
-  // 公开区显示「情报流 / 赛道图谱 / 今日热点 / 每日精选」，其余 Tab 只有进管理区后才出现
+  // 公开区显示「情报流 / (自部署或管理员可见: 群聊雷达) / 赛道图谱 / 今日热点 / 每日精选」，其余 Tab 只有进管理区后才出现
+  const showChatRadar = !isPublicSite || adminReady;
+  const publicTabCount = showChatRadar ? 5 : 4;
   const tabs: { key: Tab; label: string; icon: typeof Activity; badge?: number }[] = [
     { key: "feed", label: t("情报流"), icon: Activity },
+    ...(showChatRadar ? [{ key: "chats" as Tab, label: t("群聊雷达"), icon: MessageSquareText }] : []),
     { key: "tracks", label: t("赛道图谱"), icon: Compass },
     { key: "hot", label: t("今日热点"), icon: Flame },
     { key: "digest", label: t("每日精选"), icon: Radar },
@@ -1016,7 +1028,7 @@ export function App() {
         {/* 导航：手机横向可滚 + 右侧账号，桌面纵列无边框 */}
         <div className="-mx-3.5 mt-2.5 flex items-center gap-1.5 px-3.5 pb-0.5 lg:mx-0 lg:mt-0 lg:block lg:px-0 lg:pb-0">
           <nav ref={mobileNavRef} aria-label={t("页面导航")} className="no-scrollbar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto lg:block lg:flex-none lg:space-y-0.5 lg:overflow-visible">
-          {tabs.slice(0, 4).map((t) => (
+          {tabs.slice(0, publicTabCount).map((t) => (
             <button
               key={t.key}
               type="button"
@@ -1048,8 +1060,8 @@ export function App() {
             </button>
           ))}
           <div className="mx-1 h-4 w-px shrink-0 self-center bg-ink-200 lg:hidden" />
-          {tabs.slice(4).map((t, index) => {
-            const previous = tabs[index + 3];
+          {tabs.slice(publicTabCount).map((t, index) => {
+            const previous = tabs[index + publicTabCount - 1];
             const group = navigationGroup(t.key);
             return <Fragment key={t.key}>
               {(index === 0 || !previous || group !== navigationGroup(previous.key)) && <div className="hidden px-2.5 pt-3 pb-1 text-[12px] font-medium text-ink-500 lg:block">{group}</div>}
@@ -1163,7 +1175,7 @@ export function App() {
               </div>
             }
           >
-          {(tab === "admin" || (ADMIN_TABS.has(tab) && !((tab === "rules" || tab === "push") ? canConfigure : adminReady))) && (
+          {(tab === "admin" || (tab === "chats" && !showChatRadar) || (ADMIN_TABS.has(tab) && !((tab === "rules" || tab === "push") ? canConfigure : adminReady))) && (
             <AdminGate protectedMode={protectedMode} entryAllowed={adminEntryAllowed} onAuthChange={setAdminAuthed}>
               <div className="admin-entries grid gap-x-8 sm:grid-cols-2">
                 {ADMIN_ENTRIES.map((entry) => (
@@ -1236,6 +1248,20 @@ export function App() {
                 </div>
               </div>
 
+              {preset === "manuals" ? (
+                <div className="px-3.5 py-3.5 sm:px-6 sm:py-5">
+                  <ManualsPanel
+                    canAdmin={adminReady}
+                    initialActivityId={manualTargetActivityId}
+                    onNotify={notify}
+                    onOpenChatRadar={({ activityId, groupKey }) => {
+                      setChatTarget({ activityId: activityId ?? null, groupKey: groupKey ?? null });
+                      handleTab("chats");
+                    }}
+                  />
+                </div>
+              ) : (
+                <>
               <FeedToolbar
                 policyLabels={policyLabels}
                 loading={items.loading}
@@ -1578,7 +1604,22 @@ export function App() {
                   </div>
                 </div>
               )}
+                </>
+              )}
             </>
+          )}
+
+          {tab === "chats" && showChatRadar && (
+            <ChatRadarPanel
+              canAdmin={adminReady}
+              initialActivityId={chatTarget.activityId ?? null}
+              initialGroupKey={chatTarget.groupKey ?? null}
+              onNotify={notify}
+              onOpenManualBook={(activityId) => {
+                setManualTargetActivityId(activityId);
+                handleTab("feed", { ...DEFAULT_FEED_STATE, preset: "manuals" });
+              }}
+            />
           )}
 
           {tab === "tracks" && (
