@@ -1697,7 +1697,7 @@ export function App() {
                 blockRules.reload();
                 items.reload();
                 stats.reload();
-                notify(t("已导入常见噪音屏蔽词"));
+                notify(t("已导入生财反软广屏蔽词"));
               }}
               onToggleRule={async (id, enabled) => {
                 const res = await fetch(rulesBase + "/block-rules/" + id, {

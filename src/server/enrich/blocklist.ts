@@ -9,26 +9,20 @@ export type BlockRule = {
   created_at: string;
 };
 
-/** 常见非福利新闻/讨论噪音，用户在界面可一键导入，不强制默认写入。 */
+/** 生财有术常见私域导流、卖课钩子与纯灌水黑话，用户在界面可一键导入，零误伤正常实战复盘。 */
 export const PRESET_NOISE_PATTERNS: { pattern: string; mode: "keyword" | "regex"; scope: string; note: string }[] = [
-  { pattern: "避坑", mode: "keyword", scope: "all", note: "选购/消费避坑文章" },
-  { pattern: "测评", mode: "keyword", scope: "all", note: "产品长测/开箱" },
-  { pattern: "横评", mode: "keyword", scope: "all", note: "多款对比评测" },
-  { pattern: "怎么选", mode: "keyword", scope: "all", note: "选购攻略" },
-  { pattern: "值得买吗", mode: "keyword", scope: "all", note: "询问讨论" },
-  { pattern: "致歉", mode: "keyword", scope: "all", note: "车企/品牌公告新闻" },
-  { pattern: "股价", mode: "keyword", scope: "all", note: "财经新闻" },
-  { pattern: "油价", mode: "keyword", scope: "all", note: "油价新闻" },
-  { pattern: "漏电", mode: "keyword", scope: "all", note: "维修讨论" },
-  { pattern: "研学", mode: "keyword", scope: "all", note: "消费吐槽" },
-  { pattern: "冠军阵容", mode: "keyword", scope: "all", note: "电竞资讯" },
-  // 原本是一条正则 ^(请问|求助|有没有|求推荐|求一个)。正则没法下推成 SQL，
-  // 每次列表请求都要把 5000+ 行拉出来跑一遍 JS 正则（5-40 秒），所以拆成关键词。
-  { pattern: "请问", mode: "keyword", scope: "all", note: "提问帖" },
-  { pattern: "求助", mode: "keyword", scope: "all", note: "求助帖" },
-  { pattern: "有没有", mode: "keyword", scope: "all", note: "询问有没有" },
-  { pattern: "求推荐", mode: "keyword", scope: "all", note: "求推荐" },
-  { pattern: "求一个", mode: "keyword", scope: "all", note: "求资源" },
+  { pattern: "加我微信", mode: "keyword", scope: "all", note: "私域导流" },
+  { pattern: "扫码加微", mode: "keyword", scope: "all", note: "扫码导流" },
+  { pattern: "加微领资料", mode: "keyword", scope: "all", note: "领资料钩子" },
+  { pattern: "私信领取", mode: "keyword", scope: "all", note: "私信引流钩子" },
+  { pattern: "私聊领取", mode: "keyword", scope: "all", note: "私聊引流钩子" },
+  { pattern: "扫码进群领", mode: "keyword", scope: "all", note: "进群导流钩子" },
+  { pattern: "陪跑营招生", mode: "keyword", scope: "all", note: "付费陪跑软广" },
+  { pattern: "训练营招募", mode: "keyword", scope: "all", note: "卖课招募软广" },
+  { pattern: "知识星球优惠券", mode: "keyword", scope: "all", note: "拉新返佣软广" },
+  { pattern: "打卡第", mode: "keyword", scope: "all", note: "无营养打卡水帖" },
+  { pattern: "日入过万", mode: "keyword", scope: "all", note: "标题党夸张噱头" },
+  { pattern: "纯晒单", mode: "keyword", scope: "all", note: "纯晒收益无干货" },
 ];
 
 export function loadActiveBlockRules(): BlockRule[] {

@@ -77,7 +77,7 @@ export function RulesPanel({
             value={kw}
             onChange={(e) => setKw(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") void addKeyword(); }}
-            placeholder={t("例如：epic / Claude / 域名…")}
+            placeholder={t("例如：小红书 / 出海 / Agent…")}
             className="min-w-0 flex-1 rounded-lg border border-ink-200 bg-surface px-3 py-2 text-[13px] text-ink-950 outline-none focus:border-brand"
           />
           <button
@@ -97,7 +97,7 @@ export function RulesPanel({
                 type="button"
                 onClick={() => onJumpToSubscribed(s.keyword)}
                 className="font-medium text-ink-900 hover:text-accent"
-                title={t("点击去资源流搜索")}
+                title={t("点击去情报流搜索")}
               >
                 {s.keyword}
               </button>
@@ -113,7 +113,7 @@ export function RulesPanel({
           ))}
           {!subscriptions.length && (
             <div className="p-6 text-center text-[12px] text-ink-500">
-              {t("还没有关注词，加个「epic」或「会员」试试")}
+              {t("还没有关注词，加个「小红书」或「Agent」试试")}
             </div>
           )}
         </div>
@@ -143,20 +143,20 @@ export function RulesPanel({
               className="inline-flex items-center gap-1 rounded-lg border border-brand-border bg-brand-subtle px-3 py-1.5 text-[12px] font-medium text-accent hover:bg-ink-200/70 disabled:opacity-50"
               title={t("包含：{v}", { v: presets.map((p) => p.pattern).join("、") })}
             >
-              <Sparkles size={12} /> {t("导入常见噪音屏蔽词（{n} 条）", { n: presets.length })}
+              <Sparkles size={12} /> {t("导入生财反软广屏蔽词（{n} 条）", { n: presets.length })}
             </button>
           </div>
         </div>
 
         <p className="text-[13px] leading-relaxed text-ink-500">
-          {t("命中的条目在资源流隐藏，且")}<strong className="font-medium text-ink-800">{t("不进每日精选和 Telegram 推送")}</strong>{t("；原数据留在库里，删掉规则后立刻恢复。")}
+          {t("命中的条目在情报流隐藏，且")}<strong className="font-medium text-ink-800">{t("不进每日精选和 Telegram 推送")}</strong>{t("；原数据留在库里，删掉规则后立刻恢复。")}
         </p>
 
         <div className="grid gap-2 sm:grid-cols-12">
           <input
             value={pattern}
             onChange={(e) => setPattern(e.target.value)}
-            placeholder={mode === "regex" ? t("正则表达式，如 ^(请问|求推荐)") : t("屏蔽词，如 汽车 / 测评 / 避坑")}
+            placeholder={mode === "regex" ? t("正则表达式，如 ^(加我微信|扫码加微)") : t("屏蔽词，如 加我微信 / 私信领取 / 陪跑营")}
             className="rounded-lg border border-ink-200 bg-surface px-3 py-2 text-[13px] text-ink-950 outline-none focus:border-brand sm:col-span-5"
           />
           <select
@@ -247,7 +247,7 @@ export function RulesPanel({
           ))}
           {!rules.length && (
             <div className="p-6 text-center text-[12px] text-ink-500">
-              {t("还没有屏蔽词，可手动添加或点右上角导入常见噪音屏蔽词")}
+              {t("还没有屏蔽词，可手动添加或点右上角导入生财反软广屏蔽词")}
             </div>
           )}
         </div>

@@ -246,6 +246,7 @@ export const EN_APP: Record<string, string> = {
   "，已发 Telegram": ", sent to Telegram",
   "导入屏蔽词失败": "Could not import blocked words",
   "已导入常见噪音屏蔽词": "Imported the common-noise blocklist",
+  "已导入生财反软广屏蔽词": "Imported the SCYS anti-spam blocklist",
   "修改规则失败": "Could not update the rule",
   "删除规则失败": "Could not delete the rule",
   "规则已删除，相关条目已恢复显示": "Rule deleted; matching items are visible again",
