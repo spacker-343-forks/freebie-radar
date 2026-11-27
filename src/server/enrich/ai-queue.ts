@@ -112,7 +112,7 @@ function applyVerdictToItem(itemId: number, verdict: AiVerdict): AppliedVerdict 
     if (!cur) return null;
     const priceInfo = extractPrice(cur.title, cur.summary);
     const hints = getSourceHints(cur.source_id);
-    const rawCategory = categoryForSource(cur.source_id, isSharedResource(cur.title, cur.summary ?? "", cur.content ?? "", cur.url) ? "pan" : nextCategory ?? cur.category ?? null, hints);
+    const rawCategory = categoryForSource(cur.source_id, !cur.source_id.startsWith("scys-") && isSharedResource(cur.title, cur.summary ?? "", cur.content ?? "", cur.url) ? "pan" : nextCategory ?? cur.category ?? null, hints);
     const effectiveObtain = nextObtain ?? cur?.obtain ?? null;
     const autoKind = resolveKind(verdict.kind, verdict.keep, {
       title: cur?.title ?? "",

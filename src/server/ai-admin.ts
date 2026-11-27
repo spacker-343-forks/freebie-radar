@@ -267,7 +267,7 @@ if (!v.keep) rejected += 1;
           hints,
         );
         const baseScore = baseEnriched ? baseEnriched.score : row.score;
-        const category = categoryForSource(row.source_id, isSharedResource(row.title, row.summary ?? "", row.content ?? "", row.url) ? "pan" : isCategory(v.category) ? v.category : row.category, hints);
+        const category = categoryForSource(row.source_id, !row.source_id.startsWith("scys-") && isSharedResource(row.title, row.summary ?? "", row.content ?? "", row.url) ? "pan" : isCategory(v.category) ? v.category : row.category, hints);
         const quality =
           typeof v.quality === "number" && Number.isFinite(v.quality)
             ? Math.min(5, Math.max(1, Math.round(v.quality)))
@@ -427,7 +427,7 @@ export function reclassifyStoredItems(scope: "other" | "all" = "other", options:
     let nextCat: string | null =
       aiCategory ??
       (!options.forceAutomatic && r.ai_keep !== null && r.category && r.category !== "other" && !catWasLegacyNews ? r.category : e.category);
-    nextCat = categoryForSource(r.source_id, isSharedResource(r.title, r.summary ?? "", r.content ?? "", r.url) ? "pan" : nextCat, hints);
+    nextCat = categoryForSource(r.source_id, !r.source_id.startsWith("scys-") && isSharedResource(r.title, r.summary ?? "", r.content ?? "", r.url) ? "pan" : nextCat, hints);
     let nextKind = options.forceAutomatic ? aiKind ?? e.kind : r.ai_keep === null ? e.kind : (r.kind ?? e.kind);
     {
       nextKind = resolveKind(nextKind, r.ai_keep === 1 ? true : r.ai_keep === 0 ? false : null, {

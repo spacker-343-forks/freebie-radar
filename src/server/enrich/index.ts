@@ -257,11 +257,95 @@ export {
   dedupeByTitle,
   type DedupeEntry,
 } from "./dedup.ts";
+const SCYS_DAILY_TITLE_RE = /生财日报|风向标(?:精选)?周报|本周风向标/;
+
+const SCYS_MANUAL_RULES: Array<{ category: Category; weight: number; keywords: string[] }> = [
+  { category: "xiaohongshu", weight: 1.3, keywords: ["小红书", "私域", "朋友圈", "社群变现"] },
+  { category: "video", weight: 1.25, keywords: ["抖音", "视频号", "快手", "短视频", "直播", "剪映", "切片", "混剪", "中视频"] },
+  { category: "overseas", weight: 1.25, keywords: ["tiktok", "出海", "独立站", "shopify", "跨境", "seo", "youtube", "adsense", "reddit", "amazon", "etsy"] },
+  { category: "ecommerce", weight: 1.25, keywords: ["闲鱼", "淘宝", "拼多多", "抖店", "电商", "无货源", "选品", "1688", "店群"] },
+  { category: "media", weight: 1.2, keywords: ["公众号", "知乎", "头条", "流量主", "写作", "播客", "个人ip", "图文矩阵", "ip打造"] },
+  { category: "dev", weight: 1.3, keywords: ["小程序", "插件", "脚本", "自动化", "coze", "n8n", "cursor", "claude code", "编程", "独立开发", "saas"] },
+  { category: "design", weight: 1.35, keywords: ["ai绘画", "ai 绘画", "midjourney", "comfyui", "设计", "壁纸", "ppt", "表情包", "海报", "即梦", "可灵"] },
+  { category: "ai", weight: 1.05, keywords: ["agent", "智能体", "大模型", "gpt", "deepseek", "提示词", "prompt", "dify", "mcp", "rag"] },
+];
+
+const SCYS_RULES: Rule[] = [
+  { category: "daily", weight: 1.4, keywords: ["生财日报", "风向标周报", "本周风向标", "风向周报"] },
+  { category: "xiaohongshu", weight: 1.25, keywords: ["小红书", "私域", "小红书电商", "小红书虚拟", "笔记引流", "加微转化", "社群变现", "朋友圈运营"] },
+  { category: "video", weight: 1.2, keywords: ["抖音", "视频号", "快手", "短视频", "直播", "剪映", "切片", "中视频", "无人直播", "混剪", "带货直播"] },
+  { category: "overseas", weight: 1.25, keywords: ["tiktok", "出海", "独立站", "shopify", "跨境", "seo", "youtube", "adsense", "reddit", "amazon", "etsy", "海外工具站", "google ads", "stripe"] },
+  { category: "ecommerce", weight: 1.2, keywords: ["闲鱼", "淘宝", "拼多多", "抖店", "电商", "无货源", "选品", "1688", "店群", "供应链", "带货"] },
+  { category: "media", weight: 1.15, keywords: ["公众号", "知乎", "头条", "流量主", "写作", "播客", "个人ip", "图文矩阵", "爆文", "自媒体", "百家号"] },
+  { category: "sidehustle", weight: 1.15, keywords: ["副业", "信息差", "同城", "兼职", "轻资产", "地推", "本地生活", "美团", "大众点评", "高德", "代办", "接单变现"] },
+  { category: "design", weight: 1.2, keywords: ["ai绘画", "ai 绘画", "midjourney", "comfyui", "stable diffusion", "设计素材", "壁纸", "ppt", "表情包", "海报", "模板预设", "即梦", "可灵", "figma"] },
+  { category: "dev", weight: 1.2, keywords: ["小程序", "插件", "chrome扩展", "脚本", "自动化", "coze", "n8n", "cursor", "claude code", "编程", "独立开发", "saas", "rpa", "python", "typescript", "nextjs", "workflow"] },
+  { category: "opensource", weight: 1.2, keywords: ["开源", "github", "gitlab", "gitee", "self-host", "自托管", "github仓库", "agent skill", "开源项目", "源码"] },
+  { category: "ai", weight: 1.05, keywords: ["agent", "智能体", "大模型", "gpt", "chatgpt", "claude", "gemini", "deepseek", "提示词", "prompt", "mcp", "dify", "rag", "工作流", "ai应用", "ai变现", "算力", "token"] },
+  { category: "course", weight: 1.05, keywords: ["大航海", "航海手册", "训练营", "实战手册", "sop教程", "方法论", "课代表", "航海复盘", "教程"] },
+  { category: "finance", weight: 1.0, keywords: ["商业复盘", "商业模式", "盈利模式", "复盘", "营收", "净利", "roi", "创业心法", "年入", "变现闭环", "底层逻辑", "商业认知"] },
+  { category: "edu", weight: 1.0, keywords: ["提示词库", "指令库", "电子书", "行业报告", "白皮书", "资料包", "学习资料", "合集"] },
+  { category: "software", weight: 1.0, keywords: ["正版授权", "软件优惠", "会员额度", "效率软件", "api额度", "saas优惠", "激活码", "限免"] },
+];
+
+/** 生财有术商业赛道分类器：按标题 > 标签 > 摘要权重归入 16 个 SCYS_CATEGORY_KEYS，不影响非生财源规则。 */
+export function classifyScys(input: {
+  title: string;
+  summary?: string;
+  tags?: readonly string[];
+  sourceId?: string;
+}): { category: Category; tags: string[] } {
+  const title = stripUrls(input.title || "");
+  const titleLower = title.toLowerCase();
+  const tagsText = (input.tags ?? []).join(" ").trim();
+  const tagsLower = tagsText.toLowerCase();
+  const summaryLower = stripUrls(input.summary ?? "").toLowerCase();
+
+  if (
+    SCYS_DAILY_TITLE_RE.test(title) ||
+    (input.tags ?? []).some((t) => t.includes("生财日报") || t.includes("风向标周报"))
+  ) {
+    return { category: "daily", tags: ["生财日报"] };
+  }
+
+  if (input.sourceId === "scys-manuals") {
+    let best: { category: Category; hits: string[]; score: number } = { category: "course", hits: [], score: 0 };
+    for (const rule of SCYS_MANUAL_RULES) {
+      const hits = rule.keywords.filter((k) => matchKeyword(titleLower, k));
+      if (!hits.length) continue;
+      const score = hits.length * rule.weight;
+      if (score > best.score) best = { category: rule.category, hits, score };
+    }
+    return { category: best.category, tags: best.hits.slice(0, 6) };
+  }
+
+  let best: { category: Category; hits: string[]; score: number } = { category: "other", hits: [], score: 0 };
+  for (const rule of SCYS_RULES) {
+    const titleHits = rule.keywords.filter((k) => matchKeyword(titleLower, k));
+    const tagHits = tagsLower ? rule.keywords.filter((k) => matchKeyword(tagsLower, k)) : [];
+    const summaryHits = summaryLower ? rule.keywords.filter((k) => matchKeyword(summaryLower, k)) : [];
+    const weighted = titleHits.length * 3 + tagHits.length * 2 + summaryHits.length;
+    if (weighted <= 0) continue;
+    const score = weighted * rule.weight;
+    const mergedHits = [...new Set([...titleHits, ...tagHits, ...summaryHits])];
+    if (score > best.score) {
+      best = { category: rule.category, hits: mergedHits, score };
+    }
+  }
+  return { category: best.category, tags: best.hits.slice(0, 6) };
+}
+
 export function classify(
   title: string,
   summary: string,
-  opts?: { excludeCategories?: readonly Category[] },
+  opts?: { excludeCategories?: readonly Category[]; scys?: boolean; tags?: readonly string[]; sourceId?: string },
 ): { category: Category; tags: string[] } {
+  if (opts?.scys) {
+    const scysOut = classifyScys({ title, summary, tags: opts.tags, sourceId: opts.sourceId });
+    if (!opts.excludeCategories?.includes(scysOut.category)) {
+      return scysOut;
+    }
+  }
   const text = stripUrls(`${title} ${summary}`).toLowerCase();
   const skip = opts?.excludeCategories;
   let best: { category: Category; hits: string[]; score: number } = { category: "other", hits: [], score: 0 };
@@ -575,15 +659,16 @@ export function enrichItem(
   const url = normalizeUrl(raw.url);
   if (!url) return null;
 
-  const guessed = classify(title, summary);
+  const isScys = sourceId.startsWith("scys-");
+  const guessed = classify(title, summary, isScys ? { scys: true, tags: raw.tags, sourceId } : undefined);
   const hintCat = raw.categoryHint ?? hints?.categoryHint ?? null;
   let category: Category = guessed.category === "other" && isCategory(hintCat) ? hintCat : guessed.category;
-  if (isSharedResource(title, raw.summary ?? "", raw.content ?? "", raw.url)) category = "pan";
+  if (!isScys && isSharedResource(title, raw.summary ?? "", raw.content ?? "", raw.url)) category = "pan";
   category = categoryForSource(sourceId, category, hints);
   let tags = guessed.tags;
-  const codes = extractCodes(title, raw.content ?? raw.summary ?? "");
+  const codes = isScys ? [] : extractCodes(title, raw.content ?? raw.summary ?? "");
   const priceInfo = extractPrice(title, summary);
-  const expiresAt = raw.expiresAt ?? guessExpiry(`${title} ${summary}`);
+  const expiresAt = isScys ? (raw.expiresAt ?? null) : (raw.expiresAt ?? guessExpiry(`${title} ${summary}`));
   let obtain = guessObtain(title, summary, priceInfo);
   const kindInput = {
     title,

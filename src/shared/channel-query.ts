@@ -4,6 +4,13 @@ import { channelExcluded } from "./taxonomy.ts";
 export function applyChannelQuery(input: Record<string, string | undefined>): Record<string, string | undefined> {
   const q = { ...input };
   const defaults: Record<string, Record<string, string>> = {
+    picks: { hideRejected: "1", excludeSource: "scys-manuals" },
+    dossiers: { hideRejected: "1", hasDossier: "1" },
+    manuals: { hideRejected: "1", source: "scys-manuals" },
+    projects: { hideRejected: "1", projectCases: "1" },
+    tools: { hideRejected: "1", toolsOnly: "1" },
+    perks: { hideRejected: "1", kind: "freebie,deal" },
+    top5: { aiOnly: "1", minQuality: "5" },
     verified: { unexpired: "1", aiOnly: "1", kind: "freebie", obtain: "free,conditional", maxAgeDays: "7" },
     // 网盘频道按分类收，形态只该是福利/好价/资讯；opensource 与 news 混进来时
     // 会出现「开源项目」标签挂在网盘频道里（2026-11-24 修过一批），news 同理。

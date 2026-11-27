@@ -7,6 +7,21 @@
  */
 export const EN_TAXONOMY: Record<string, string> = {
   /* ---------------- 分类（小类） ---------------- */
+  "AI 应用/智能体": "AI Apps & Agents",
+  "小红书/私域": "Xiaohongshu & Private Traffic",
+  "短视频/直播": "Short Video & Live",
+  "出海/独立站": "Global & Indie Sites",
+  "电商/带货": "E-commerce & Selling",
+  "副业/信息差": "Side Hustles & Arbitrage",
+  "生财日报/风向": "SCYS Daily & Trends",
+  "开源/工作流": "Open Source & Workflows",
+  "额度/好价工具": "Tools & Credits",
+  "编程/自动化": "Coding & Automation",
+  "设计/效率工具": "Design & Productivity",
+  "自媒体/IP": "Creator Media & IP",
+  "商业复盘/认知": "Business Breakdowns",
+  "资料/提示词包": "SOPs & Prompt Packs",
+  "航海实战教材": "Voyage Playbooks",
   "AI 额度": "AI credits",
   云服务: "Cloud services",
   "VPS/主机": "VPS / servers",
@@ -37,6 +52,21 @@ export const EN_TAXONOMY: Record<string, string> = {
   其它: "Other",
 
   /* ---------------- 分类说明 ---------------- */
+  "AI 应用落地 / Agent 智能体 / Prompt 工程 / AI 变现与额度": "Applied AI apps, Agents, prompt engineering, AI monetization and credits",
+  "小红书电商 / 虚拟资料 / 私域引流 / 社群与个人IP变现": "Xiaohongshu shops, digital goods, private-traffic funnels, communities and personal IP",
+  "抖音 / 视频号 / 快手 / YouTube 短视频、中视频与直播切片带货": "Douyin, WeChat Channels, Kuaishou and YouTube short/mid videos and livestream clips",
+  "TikTok 跨境 / Shopify 独立站 / 海外工具站 / SEO 与 AdSense": "TikTok cross-border, Shopify indie stores, overseas web tools, SEO and AdSense",
+  "闲鱼 / 淘宝 / 拼多多 / 抖店 / 选品供应链与无货源电商": "Xianyu, Taobao, PDD, Douyin Shop, product selection and dropshipping",
+  "轻资产副业 / 本地同城获客 / 平台红利 / 信息差与实战项目": "Asset-light side hustles, local lead-gen, platform arbitrage and practical projects",
+  "生财日报 / 风向标精选 / 平台新规与商业趋势洞察": "SCYS daily digests, trend radar picks, platform policy updates and market insights",
+  "GitHub 仓库 / Agent Skill / Coze 与 n8n 工作流 / 自托管工具": "GitHub repos, Agent Skills, Coze/n8n workflows and self-hosted tools",
+  "SaaS 工具优惠 / API 额度 / 正版软件授权与效率应用": "SaaS deals, API credits, genuine software licenses and productivity apps",
+  "AI Coding / 独立开发 / 自动化脚本 / 插件与小程序实战": "AI coding, indie hacking, automation scripts, browser extensions and mini-programs",
+  "设计素材 / AI 绘图视频工具 / 模板预设 / 效率软件": "Design assets, AI image/video tools, templates, presets and productivity software",
+  "公众号 / 知乎 / 播客 / 图文矩阵 / 流量主与内容 IP": "WeChat Official Accounts, Zhihu, podcasts, content matrices and creator monetization",
+  "商业模式拆解 / 营收复盘 / 创业心法与宏观商业认知": "Business model breakdowns, revenue retrospectives, founder mindset and market insights",
+  "SOP 文档 / 提示词库 / 电子书 / 行业报告与学习资料": "SOP docs, prompt libraries, ebooks, industry reports and study packs",
+  "大航海实战手册 / 系统训练营 / SOP 教程与方法论": "Voyage field manuals, structured bootcamps, SOP guides and playbooks",
   "大模型额度 / Token / 算力 / API 试用": "LLM credits, tokens, compute and API trials",
   "云主机外的云服务：对象存储 / CDN / 数据库 / 代理流量": "Cloud services beyond VMs: object storage, CDN, databases, proxy traffic",
   "独立服务器 / VPS 小鸡 / 现车 / 家宽": "Dedicated servers, VPS boxes, in-stock restocks, home broadband",
@@ -69,6 +99,10 @@ export const EN_TAXONOMY: Record<string, string> = {
   兜底分类: "Fallback category",
 
   /* ---------------- 分类分组 ---------------- */
+  商业变现赛道: "Commercial Tracks",
+  "AI 与技术工程": "AI & Engineering",
+  风向与体系课: "Trends & Courses",
+  资源与工具福利: "Resources & Tool Perks",
   福利与交易: "Freebies & trading",
   技术与工具: "Tech & tooling",
   内容与学习: "Content & learning",
@@ -89,6 +123,12 @@ export const EN_TAXONOMY: Record<string, string> = {
   其它资讯: "Other news",
 
   /* ---------------- 频道 ---------------- */
+  精选干货: "Top Picks",
+  立项拆解: "Dossiers",
+  航海手册: "Field Manuals",
+  项目案例: "Project Cases",
+  开源与工具: "OSS & Tools",
+  福利与资料: "Perks & Packs",
   真福利: "True freebies",
   全部白嫖: "All free stuff",
   重要新闻: "Headlines",

@@ -465,6 +465,29 @@ function buildItemsQuery(
     where.push("source_id = ?");
     params.push(q.source);
   }
+  if (q.excludeSource) {
+    const excluded = q.excludeSource.split(",").map((s) => s.trim()).filter(Boolean);
+    if (excluded.length) {
+      where.push(`source_id NOT IN (${excluded.map(() => "?").join(",")})`);
+      params.push(...excluded);
+    }
+  }
+  if (q.hasDossier === "1") {
+    where.push("EXISTS (SELECT 1 FROM item_dossiers d WHERE d.item_id = items.id)");
+  }
+  if (q.minQuality) {
+    const mq = Number(q.minQuality);
+    if (Number.isFinite(mq) && mq >= 1 && mq <= 5) {
+      where.push("ai_quality >= ?");
+      params.push(Math.round(mq));
+    }
+  }
+  if (q.projectCases === "1") {
+    where.push("(source_id = 'scys-projects' OR EXISTS (SELECT 1 FROM json_each(items.tags) WHERE json_each.value IN ('项目库', '风向标中标')))");
+  }
+  if (q.toolsOnly === "1") {
+    where.push("(kind = 'opensource' OR category IN ('opensource', 'design') OR (category = 'dev' AND source_id != 'scys-manuals'))");
+  }
   if (q.category) {
     const cats = q.category.split(",").map((s) => s.trim()).filter(Boolean);
     if (cats.length === 1) {
@@ -1356,7 +1379,8 @@ const fetchLimit = Math.min(Math.max(offset + limit * 3, 240), 600);
 
     const hasChannelFilter = Boolean(
       q.preset || q.kind || q.obtain || q.aiOnly || q.hideRejected || q.unexpired || q.freeOnly || q.maxPrice ||
-      q.source || q.search || q.since || q.lang || q.hasCodes || q.expiring || q.starred ||
+      q.source || q.excludeSource || q.hasDossier || q.minQuality || q.projectCases || q.toolsOnly ||
+      q.search || q.since || q.lang || q.hasCodes || q.expiring || q.starred ||
       q.unread || q.subscribed || q.minScore || q.status,
     );
     let byCategory: { category: string | null; n: number }[];

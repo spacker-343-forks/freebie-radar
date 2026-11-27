@@ -629,7 +629,7 @@ function persist(
       // 再统一收口：资讯/水帖不许落进实物福利
       const effectiveCategory = categoryForSource(sourceId, demoteEditorialGoods(
         demoteOfflineCategory(
-          categoryForSource(sourceId, isSharedResource(raw.title, raw.summary ?? "", raw.content ?? "", raw.url) ? "pan" : kindCategory ?? (verdict?.category && isCategory(verdict.category) ? verdict.category : e.category), srcHints),
+          categoryForSource(sourceId, !sourceId.startsWith("scys-") && isSharedResource(raw.title, raw.summary ?? "", raw.content ?? "", raw.url) ? "pan" : kindCategory ?? (verdict?.category && isCategory(verdict.category) ? verdict.category : e.category), srcHints),
           effectiveKind,
           e.title,
           e.summary ?? "",
@@ -707,7 +707,7 @@ const scoreCtx = {
           } catch { /* 保留旧值 */ }
         }
         const proposedCategory = verdict && isCategory(verdict.category) ? verdict.category : (storedAiCategory ?? e.category);
-        const baseCategory = categoryForSource(sourceId, isSharedResource(raw.title, raw.summary ?? "", raw.content ?? "", raw.url) ? "pan" : proposedCategory, srcHints);
+        const baseCategory = categoryForSource(sourceId, !sourceId.startsWith("scys-") && isSharedResource(raw.title, raw.summary ?? "", raw.content ?? "", raw.url) ? "pan" : proposedCategory, srcHints);
         const baseObtain = verdict ? effectiveObtain : existing.ai_keep === null ? e.obtain : existing.obtain ?? e.obtain;
         const nextAutoKind = verdict ? effectiveKind : resolveKind(existing.kind, existing.ai_keep === null ? null : existing.ai_keep === 1, {
           title: e.title, summary: e.summary ?? "", sourceId, category: baseCategory, obtain: baseObtain,

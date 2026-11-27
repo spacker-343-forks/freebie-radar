@@ -28,7 +28,8 @@
     "scys:tools": "tsx scripts/scys-auth.ts --tools",
     "scys:backfill": "tsx scripts/scys-backfill.ts",
     "scys:manuals": "tsx scripts/scys-manuals-backfill.ts",
-    "scys:burn": "tsx scripts/scys-burn.ts"
+    "scys:burn": "tsx scripts/scys-burn.ts",
+    "scys:reclassify": "tsx scripts/scys-reclassify.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.4",

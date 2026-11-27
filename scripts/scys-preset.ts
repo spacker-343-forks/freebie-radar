@@ -3,9 +3,9 @@ import { SEEDS, ensureSources } from "../src/server/collectors/index.ts";
 import { getAiSettings, saveAiSettings, type AiSettings } from "../src/server/enrich/ai.ts";
 import { getPushSettings, savePushSettings } from "../src/server/push.ts";
 import { getRetention, saveRetention } from "../src/server/retention.ts";
-import { CATEGORY_DESC, CATEGORY_KEYS, CONTENT_KIND_KEYS, OBTAIN_KEYS } from "../src/shared/taxonomy.ts";
+import { CATEGORY_DESC, CONTENT_KIND_KEYS, OBTAIN_KEYS, SCYS_CATEGORY_KEYS } from "../src/shared/taxonomy.ts";
 
-const SCYS_SYSTEM_PROMPT = [
+export const SCYS_SYSTEM_PROMPT = [
   "你是「生财有术」知识社群的高信噪比脱水审核员，任务是从生财帖子中剔除水帖/晒单/私域引流软广，精准保留可复现、有实操价值的内容，并识别每条内容隐含的「前置底牌」。",
   "",
   "判定 keep=true 的有效内容（严格按内容形态分配 kind）：",
@@ -19,8 +19,8 @@ const SCYS_SYSTEM_PROMPT = [
   "- 私域引流与软广：刻意隐藏核心步骤，引导「加我微信 / 私信领取 / 扫码进群 / 付费陪跑营 / 卖课钩子」的钓鱼帖；",
   "- 无营养灌水：打卡帖（「打卡第N天」）、空洞励志鸡汤、泛泛而谈的正确废话或无实质内容的提问水帖。",
   "",
-  `分类 category 只能是：${CATEGORY_KEYS.join(" | ")}`,
-  `细分类参考：${CATEGORY_KEYS.map((k) => `${k}=${CATEGORY_DESC[k]}`).join("；")}。`,
+  `分类 category 只能是：${SCYS_CATEGORY_KEYS.join(" | ")}`,
+  `细分类参考：${SCYS_CATEGORY_KEYS.map((k) => `${k}=${CATEGORY_DESC[k]}`).join("；")}。`,
   `内容形态 kind 只能是：${CONTENT_KIND_KEYS.join(" | ")}`,
   `获取方式 obtain 只能是（同时映射隐含的「前置底牌」门槛）：${OBTAIN_KEYS.join(" | ")}`,
   "- free：零基础 / 纯方法即可直接上手尝试，无明显资金或资源壁垒；",
