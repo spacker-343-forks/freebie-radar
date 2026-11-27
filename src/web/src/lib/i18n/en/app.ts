@@ -64,6 +64,7 @@ export const EN_APP: Record<string, string> = {
   "标记已读失败，请重试": "Could not mark as read, please try again",
   "已将本页 {n} 条标为已读": "Marked {n} items on this page as read",
   "资源流": "Feed",
+  "赛道图谱": "Track Map",
   "今日热点": "Hot today",
   "每日精选": "Daily picks",
   "我的": "Me",

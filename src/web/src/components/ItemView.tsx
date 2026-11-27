@@ -17,7 +17,9 @@ import {
 import { KIND_LABEL, OBTAIN_HINT, OBTAIN_LABEL, categoryLabelForKind, expiresLabel, extractBlockCandidates, timeAgo } from "../lib/sources.ts";
 import { isSummaryCoveredByContent, plainCharCount, splitReasonBadge } from "../lib/snapshot.ts";
 import { SnapshotContent } from "./SnapshotContent.tsx";
+import type { ItemDossier } from "../../../shared/dossier.ts";
 import type { Item } from "../types.ts";
+import { DossierCard } from "./DossierCard.tsx";
 import { ItemClassificationEditor, type ClassificationPatch } from "./ItemClassificationEditor.tsx";
 import { t } from "../lib/i18n.ts";
 import { useNow } from "../lib/clock.ts";
@@ -163,6 +165,18 @@ function sourceTone(id: string): string {
   return SOURCE_TONES[hash % SOURCE_TONES.length]!;
 }
 
+function DossierBadge({ item }: { item: Item }) {
+  if (!item.hasDossier && !item.dossier) return null;
+  return (
+    <span
+      className="inline-flex shrink-0 items-center rounded-full border border-brand-border bg-brand-subtle px-1.5 py-0.5 text-[11px] font-medium text-accent"
+      title={t("已生成 AI 实战立项拆解书")}
+    >
+      {t("⚡立项书")}
+    </span>
+  );
+}
+
 function MetaSep({ className = "" }: { className?: string }) {
   return <span aria-hidden="true" className={"text-ink-300 " + className}>·</span>;
 }
@@ -253,6 +267,7 @@ export function CompactRow({
           </button>
           <span className="flex flex-wrap items-center gap-1 sm:contents">
             <KindBadge kind={item.kind} category={item.category} inline />
+            <DossierBadge item={item} />
             {showPrice && <PriceBadge item={item} inline />}
             {showPrice && <ObtainBadge obtain={item.obtain} inline />}
           </span>
@@ -479,6 +494,7 @@ export function ItemCard({
               </>
             )}
             <KindBadge kind={item.kind} category={item.category} />
+            <DossierBadge item={item} />
             {item.kind !== "news" && item.kind !== "info" && <PriceBadge item={item} />}
             {item.kind !== "news" && item.kind !== "info" && <ObtainBadge obtain={item.obtain} />}
           </div>
@@ -648,6 +664,9 @@ export function ItemDetailDrawer({
   error = null,
   onRetry,
   onClassificationSave,
+  canAdmin = false,
+  onDossierUpdated,
+  onNotify,
 }: {
   item: Item;
   sourceName: (id: string) => string;
@@ -663,6 +682,9 @@ export function ItemDetailDrawer({
   error?: string | null;
   onRetry?: () => void;
   onClassificationSave?: (id: number, patch: ClassificationPatch) => Promise<void>;
+  canAdmin?: boolean;
+  onDossierUpdated?: (itemId: number, dossier: ItemDossier) => void;
+  onNotify?: (message: string) => void;
 }) {
   const exp = expiresLabel(item.expires_at);
   const codes = Array.isArray(item.codes) ? item.codes : [];
@@ -817,6 +839,16 @@ export function ItemDetailDrawer({
               </div>
             );
           })()}
+
+          {!loading && !error && (
+            <DossierCard
+              itemId={item.id}
+              dossier={item.dossier}
+              canAdmin={canAdmin}
+              onDossierUpdated={onDossierUpdated}
+              onNotify={onNotify}
+            />
+          )}
 
           {codes.length > 0 && (
             <div className="rounded-lg border border-code-border bg-code-subtle/70 p-3.5">

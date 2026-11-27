@@ -1,3 +1,5 @@
+import type { ItemDossier } from "../../shared/dossier.ts";
+
 export type Item = {
   id: number;
   source_id: string;
@@ -32,6 +34,8 @@ export type Item = {
   last_seen_at: string;
   /** 同一福利被多少个源报道（1 = 只有这一条） */
   dupCount?: number;
+  hasDossier?: boolean;
+  dossier?: ItemDossier | null;
   manualClassification?: { category: string | null; kind: string | null; note: string; updated_at: string } | null;
 };
 

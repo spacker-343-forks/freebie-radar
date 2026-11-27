@@ -69,4 +69,23 @@ export const EN_ITEMVIEW: Record<string, string> = {
   "仅对「{name}」生效": "Only for “{name}”",
   "仅隐藏这一条": "Hide just this one",
   "加入屏蔽规则": "Add block rule",
+
+  /* ---------------- 实战立项拆解书 ---------------- */
+  "已生成 AI 实战立项拆解书": "AI implementation dossier generated",
+  "⚡立项书": "⚡Dossier",
+  "立项书生成失败，请稍后重试": "Failed to generate dossier, please try again",
+  "AI 实战立项拆解书已生成": "AI implementation dossier generated",
+  "尚未生成本帖的 AI 实战立项拆解书": "No AI implementation dossier generated for this post yet",
+  "正在拆解…": "Generating…",
+  "⚡ 用顶配模型生成实战立项书": "⚡ Generate Dossier with Top Model",
+  "⚡ AI 实战立项拆解书": "⚡ AI Implementation Dossier",
+  "启动成本": "Startup Cost",
+  "首单周期": "Time to 1st Dollar",
+  "重新拆解": "Regenerate",
+  "一句话立项锐评": "One-Line Verdict",
+  "赚钱算账公式": "Unit Economics Formula",
+  "去水分执行 SOP": "Actionable SOP",
+  "核心死穴与隐性坑": "Core Pitfalls & Traps",
+  "单人 + AI 最小验证改法": "Solo + AI Lean MVP",
+  "模型": "Model",
 };

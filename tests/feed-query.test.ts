@@ -70,7 +70,7 @@ test("category counts keep channel policy while removing only category, sort and
 });
 
 test("admin navigation is a real route and every destination retains feed search", () => {
-  for (const tab of ["feed", "hot", "digest", "me", "rules", "push", "ai", "ops", "site", "admin"] as const) {
+  for (const tab of ["feed", "tracks", "hot", "digest", "me", "rules", "push", "ai", "ops", "site", "admin"] as const) {
     const url = tabUrl("/", "?preset=news&q=API", tab);
     assert.equal(readTab(new URL(url, "http://localhost").hash), tab);
     assert.ok(url.includes("?preset=news&q=API"));

@@ -24,6 +24,7 @@ import {
   X,
   Zap,
   Code,
+  Compass,
   CheckCheck,
   Flame,
   Newspaper,
@@ -70,6 +71,7 @@ import { KIND_LABEL, KIND_ORDER, OBTAIN_HINT, OBTAIN_LABEL, SOURCE_GROUPS, categ
 
 // 管理区 / 次要 Tab 的大面板按需加载：首屏只发资源流真正要用的代码
 const DigestPanel = lazy(async () => ({ default: (await import("./components/DigestPanel.tsx")).DigestPanel }));
+const TracksPanel = lazy(async () => ({ default: (await import("./components/TracksPanel.tsx")).TracksPanel }));
 const HotPanel = lazy(async () => ({ default: (await import("./components/HotPanel.tsx")).HotPanel }));
 const RulesPanel = lazy(async () => ({ default: (await import("./components/RulesPanel.tsx")).RulesPanel }));
 const PushPanel = lazy(async () => ({ default: (await import("./components/PushPanel.tsx")).PushPanel }));
@@ -762,9 +764,10 @@ export function App() {
     sources: enabledSources.filter((s) => groupOfSource(s) === g.key),
   })).filter((g) => g.sources.length > 0);
 
-  // 公开区显示「资源流 / 今日热点 / 每日精选」，其余 Tab 只有进管理区后才出现
+  // 公开区显示「资源流 / 赛道图谱 / 今日热点 / 每日精选」，其余 Tab 只有进管理区后才出现
   const tabs: { key: Tab; label: string; icon: typeof Activity; badge?: number }[] = [
     { key: "feed", label: t("资源流"), icon: Activity },
+    { key: "tracks", label: t("赛道图谱"), icon: Compass },
     { key: "hot", label: t("今日热点"), icon: Flame },
     { key: "digest", label: t("每日精选"), icon: Radar },
     ...(me ? [{ key: "me" as Tab, label: t("账号与通知"), icon: User }] : []),
@@ -1014,7 +1017,7 @@ export function App() {
         {/* 导航：手机横向可滚 + 右侧账号，桌面纵列无边框 */}
         <div className="-mx-3.5 mt-2.5 flex items-center gap-1.5 px-3.5 pb-0.5 lg:mx-0 lg:mt-0 lg:block lg:px-0 lg:pb-0">
           <nav ref={mobileNavRef} aria-label={t("页面导航")} className="no-scrollbar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto lg:block lg:flex-none lg:space-y-0.5 lg:overflow-visible">
-          {tabs.slice(0, 3).map((t) => (
+          {tabs.slice(0, 4).map((t) => (
             <button
               key={t.key}
               type="button"
@@ -1046,8 +1049,8 @@ export function App() {
             </button>
           ))}
           <div className="mx-1 h-4 w-px shrink-0 self-center bg-ink-200 lg:hidden" />
-          {tabs.slice(3).map((t, index) => {
-            const previous = tabs[index + 2];
+          {tabs.slice(4).map((t, index) => {
+            const previous = tabs[index + 3];
             const group = navigationGroup(t.key);
             return <Fragment key={t.key}>
               {(index === 0 || !previous || group !== navigationGroup(previous.key)) && <div className="hidden px-2.5 pt-3 pb-1 text-[12px] font-medium text-ink-500 lg:block">{group}</div>}
@@ -1579,6 +1582,18 @@ export function App() {
             </>
           )}
 
+          {tab === "tracks" && (
+            <TracksPanel
+              canAdmin={adminReady}
+              sourceName={sourceName}
+              onPatch={patch}
+              onOpen={setDetail}
+              onQuickBlock={setQuickBlock}
+              onCopyCode={copyCode}
+              onNotify={notify}
+            />
+          )}
+
           {tab === "hot" && (
             <HotPanel
               report={hot.data}
@@ -1926,6 +1941,15 @@ export function App() {
           } : undefined}
           onQuickBlock={setQuickBlock}
           onCopyCode={copyCode}
+          canAdmin={adminReady}
+          onNotify={notify}
+          onDossierUpdated={(id, dossier) => {
+            setDetail((current) => current?.id === id ? { ...current, hasDossier: true, dossier } : current);
+            items.update((current) => current ? {
+              ...current,
+              items: current.items.map((it) => it.id === id ? { ...it, hasDossier: true, dossier } : it),
+            } : current);
+          }}
         />
       )}
 
