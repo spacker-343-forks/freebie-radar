@@ -249,6 +249,19 @@ export function resolveDeepModel(s: AiSettings): string {
   return m || "gpt-6.2-astra:xhigh";
 }
 
+export function resolveCommentModel(s: AiSettings): string {
+  const envComment = (process.env.AI_COMMENT_MODEL ?? "").trim();
+  if (envComment) return envComment;
+  const m = (s.model || "").trim();
+  if (!m) return "gpt-6.1-terra:medium";
+  const parsed = parseModelSpec(m);
+  if (/^gpt-(?:5|6)(?:[.-]|$)/i.test(parsed.model)) return "gpt-6.1-terra:medium";
+  if (parsed.reasoningEffort === "high" || parsed.reasoningEffort === "xhigh") {
+    return `${parsed.model}:medium`;
+  }
+  return m;
+}
+
 /** 运行时是否真的能调 AI（开关开、端点与模型都有）。 */
 export function aiReady(s = getAiSettings()): boolean {
   const fb = readFallbackConfig();

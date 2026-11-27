@@ -8,6 +8,10 @@ Object.assign(process.env, {
   AI_BASE_URL: "",
   AI_MODEL: "",
   AI_API_KEY: "",
+  AI_COMMENT_MODEL: "",
+  AI_FALLBACK_BASE_URL: "",
+  AI_FALLBACK_API_KEY: "",
+  AI_FALLBACK_MODEL: "",
   PUSH_CHANNEL: "none",
   ENABLE_SCHEDULER: "false",
 });
@@ -35,9 +39,19 @@ const {
 const {
   createScysCollector,
   decodeScysInlineTags,
+  ensureScysCommentSyncTable,
+  extractScysTopicIdentity,
+  extractSubstantiveCommentText,
   formatStructuredProjectContent,
   parseScysTimestamp,
+  prepareScysCommentCandidates,
+  renderDistilledScysComments,
+  replaceSnapshotComments,
+  selectAndFormatScysComments,
+  syncScysItemComments,
 } = await import("../src/server/collectors/scys.ts");
+const { DEFAULT_AI_SETTINGS, resolveCommentModel } = await import("../src/server/enrich/ai-settings.ts");
+const { distillCommentPostsWithAi } = await import("../src/server/scys/comment-ai.ts");
 
 type MockServerState = {
   baseUrl: string;
@@ -51,12 +65,16 @@ type MockServerState = {
   tokenCount: number;
   handoffPolls: number;
   topicDetailCalls: Array<{ entityType?: unknown; entityId?: unknown; token: string }>;
+  pageTopicCommentCalls: Array<Record<string, unknown>>;
   contentSearchCalls: Array<Record<string, unknown>>;
   searchTopicCalls: Array<Record<string, unknown>>;
   projectCasesCalls: Array<Record<string, unknown>>;
   lastSessionIdSeen: string | null;
   lastCodeChallenge: string | null;
   longTopicBodyById: Record<string, string>;
+  commentsCountById: Record<string, number>;
+  commentsById: Record<string, unknown[]>;
+  toolRateLimitOnce: boolean;
   validTokens: Set<string>;
 };
 
@@ -84,12 +102,16 @@ function startMockScysServer() {
     tokenCount: 0,
     handoffPolls: 0,
     topicDetailCalls: [],
+    pageTopicCommentCalls: [],
     contentSearchCalls: [],
     searchTopicCalls: [],
     projectCasesCalls: [],
     lastSessionIdSeen: null,
     lastCodeChallenge: null,
     longTopicBodyById: {},
+    commentsCountById: {},
+    commentsById: {},
+    toolRateLimitOnce: false,
     validTokens: new Set(["access-token-1"]),
   };
 
@@ -139,6 +161,22 @@ function startMockScysServer() {
         properties: {
           entityType: { type: "string" },
           entityId: { type: "string" },
+        },
+        required: ["entityType", "entityId"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "pageTopicComment",
+      description: "Get paginated topic comments",
+      inputSchema: {
+        type: "object",
+        properties: {
+          entityType: { type: "string" },
+          entityId: { type: "string" },
+          commentPageSize: { type: "integer" },
+          pageIndex: { type: "integer" },
+          sortType: { type: "integer", enum: [1, 2, 3] },
         },
         required: ["entityType", "entityId"],
         additionalProperties: false,
@@ -393,6 +431,9 @@ function startMockScysServer() {
                         articleContent:
                           '<e type="text_bold" title="%E4%BB%8A%E5%A4%A9%E5%AE%9E%E6%B5%8B%E4%BA%86%E4%B8%80%E4%B8%AA%E5%86%B7%E9%97%A8%E4%BF%A1%E6%81%AF%E5%B7%AE%E9%A1%B9%E7%9B%AE" />%E5%86%85%E5%AE%B9',
                         menuList: [{ key: 1, value: "风向标" }],
+                        ...(state.commentsCountById["1002"] !== undefined
+                          ? { commentsCount: state.commentsCountById["1002"] }
+                          : {}),
                       },
                       topicUserDTO: { name: "小满" },
                     },
@@ -415,6 +456,9 @@ function startMockScysServer() {
                         articleContent: "完整拆解工作流与变现路径",
                         menuList: [{ key: 2428701, value: "官方活动" }, { key: 2, value: "精华" }],
                         miniImageList: ["https://scys.com/img/cover-1001.png"],
+                        ...(state.commentsCountById["1001"] !== undefined
+                          ? { commentsCount: state.commentsCountById["1001"] }
+                          : {}),
                       },
                       topicUserDTO: { name: "阿哲" },
                     },
@@ -464,13 +508,44 @@ function startMockScysServer() {
                         '<e type="hashtag" title="%23AI%E5%89%AF%E4%B8%9A%23" />',
                   },
                   documentList: [{ title: "飞书补充表", content: "飞书文档补充SOP与工具清单" }],
-                  topicCommentDTOList: [
-                    { commentUserDTO: { name: "亦仁" }, content: '<e type="mention" title="%40%E9%98%BF%E5%93%B2" /> 这个切入点很扎实' },
-                  ],
+                  ...(state.commentsById[eid]
+                    ? {}
+                    : {
+                        topicCommentDTOList: [
+                          {
+                            commentUserDTO: { name: "亦仁" },
+                            content: '<e type="mention" title="%40%E9%98%BF%E5%93%B2" /> 这个切入点很扎实',
+                          },
+                        ],
+                      }),
                 }),
               },
             ],
           };
+        } else if (name === "pageTopicComment") {
+          assert.ok(args.entityType && args.entityId, "pageTopicComment 必须传 entityType 和 entityId");
+          state.pageTopicCommentCalls.push(args);
+          if (state.toolRateLimitOnce) {
+            state.toolRateLimitOnce = false;
+            result = {
+              isError: true,
+              content: [
+                {
+                  type: "text",
+                  text: "MCP_RATE_LIMITED: dimension=USER_TOOL, retryAfterSeconds=0.1, toolName=pageTopicComment, action=sleep 1s before calling this tool again",
+                },
+              ],
+            };
+          } else {
+            const eid = String(args.entityId);
+            const list = state.commentsById[eid] ?? [];
+            result = {
+              structuredContent: {
+                items: list,
+                total: list.length,
+              },
+            };
+          }
         } else if (name === "searchProjectCases") {
           state.projectCasesCalls.push(args);
           result = {
@@ -590,8 +665,10 @@ after(async () => {
 });
 
 beforeEach(() => {
+  ensureScysCommentSyncTable();
   run("DELETE FROM settings WHERE key = 'scys_mcp_auth'");
   run("DELETE FROM items");
+  run("DELETE FROM scys_comment_sync");
   mock.state.sseMode = false;
   mock.state.rateLimitOnce = false;
   mock.state.rejectRefresh = false;
@@ -601,12 +678,16 @@ beforeEach(() => {
   mock.state.sessionCounter = 1;
   mock.state.handoffPolls = 0;
   mock.state.topicDetailCalls = [];
+  mock.state.pageTopicCommentCalls = [];
   mock.state.contentSearchCalls = [];
   mock.state.searchTopicCalls = [];
   mock.state.projectCasesCalls = [];
   mock.state.lastSessionIdSeen = null;
   mock.state.lastCodeChallenge = null;
   mock.state.longTopicBodyById = {};
+  mock.state.commentsCountById = {};
+  mock.state.commentsById = {};
+  mock.state.toolRateLimitOnce = false;
   mock.resetTokens();
 });
 
@@ -1207,4 +1288,328 @@ test("超长万字富文本无损归档 (>20,000字)、旧 8,000 字截断记录
 
   // 恢复默认 retention 避免影响其他测试
   saveRetention({ itemDays: 60, keptDays: 180, auto: true });
+});
+
+test("评论区脱水筛选、楼主多段补充保留、水评剔除、增量回访补抓与 syncScysItemComments 单帖同步", async () => {
+  // 1) 纯函数验证：保留楼主自评 + 含楼主追答的提问楼，剔除水评，保留配图并按赞数排序
+  const formatted = selectAndFormatScysComments(
+    [
+      { commentId: "c1", userName: "路人甲", content: "感谢分享！", likeCount: 0, isAuthor: false, gmtCreate: 10 },
+      { commentId: "c2", userName: "路人乙", content: "666", likeCount: 1, isAuthor: false, gmtCreate: 11 },
+      {
+        commentId: "c3",
+        userName: "圈友A",
+        content: "怎么测纯净度？",
+        likeCount: 0,
+        isAuthor: false,
+        gmtCreate: 20,
+        replies: [
+          {
+            commentId: "r1",
+            userName: "阿哲",
+            replyUserName: "圈友A",
+            isAuthor: true,
+            likeCount: 2,
+            gmtCreate: 21,
+            content: "先跑 Scamalytics 看欺诈分 < 20 再绑卡",
+          },
+        ],
+      },
+      {
+        commentId: "c4",
+        userName: "阿哲",
+        isAuthor: true,
+        likeCount: 5,
+        gmtCreate: 15,
+        content: "作者补充三步自检：\n\n第一步：查欺诈分\n第二步：对齐美区免税州账单地址",
+        images: "https://scys.com/img/check-step.png",
+      },
+      {
+        commentId: "c5",
+        userName: "高赞实测员",
+        isAuthor: false,
+        likeCount: 8,
+        gmtCreate: 30,
+        content: "实测老号用 Bybit 0 余额直接过验证，记得立刻关自动续费。",
+      },
+    ],
+    { postAuthor: "阿哲", maxComments: 10 },
+  );
+
+  assert.equal(formatted.keptCount, 3, "水评 c1/c2 应被过滤，保留 c4(楼主)、c3(含楼主追答) 与 c5(高赞实测)");
+  assert.ok(formatted.lines[0]?.startsWith("💬 阿哲 [楼主·👍5]: 作者补充三步自检："));
+  assert.ok(formatted.lines[0]?.includes("![](https://scys.com/img/check-step.png)"));
+  assert.ok(formatted.lines[1]?.includes("💬 圈友A: 怎么测纯净度？"));
+  assert.ok(formatted.lines[1]?.includes("↳ 阿哲 [楼主·👍2] 回复 圈友A: 先跑 Scamalytics 看欺诈分 < 20 再绑卡"));
+  assert.ok(formatted.lines[2]?.startsWith("💬 高赞实测员 [👍8]: 实测老号用 Bybit"));
+
+  const merged = replaceSnapshotComments("原帖正文\n\n【精选评论】\n旧评论", formatted.lines);
+  assert.equal((merged.match(/【精选评论】/g) ?? []).length, 1);
+  assert.equal(merged.includes("旧评论"), false);
+
+  // 2) 联调增量回访：首次发帖 commentsCount=0 不调 pageTopicComment；后补评论 commentsCount=2 时仅增量补抓评论
+  ensureSources();
+  saveScysAuth({
+    mcpUrl: `${mock.state.baseUrl}/shengcai-web/mcp`,
+    clientId: "mock-client-123",
+    accessToken: "access-token-1",
+    refreshToken: "refresh-token-1",
+    expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+    tokenEndpoint: `${mock.state.baseUrl}/mcp-oauth/token`,
+    updatedAt: new Date().toISOString(),
+  });
+
+  mock.state.commentsCountById["1001"] = 0;
+  mock.state.commentsById["1001"] = [];
+  const collector = createScysCollector(() => new ScysMcpClient({ minIntervalMs: 0, maxConcurrencyPerSlot: 4 }));
+
+  const firstCollect = await collector.collect({
+    sourceId: "scys-highlights",
+    config: { mode: "highlights", pageScene: "good", pageSize: 5, fetchDetail: true, maxDetailPerRun: 5 },
+    cursor: null,
+    maxItems: 10,
+    http: {} as never,
+    log: () => {},
+  });
+  assert.equal(mock.state.topicDetailCalls.length, 1);
+  assert.equal(mock.state.pageTopicCommentCalls.length, 0, "0 评论帖不应浪费 pageTopicComment 请求");
+  ingestItems("scys-highlights", firstCollect.items);
+
+  // 模拟 10 分钟后楼主在评论区补充关键步骤 (commentsCount 变为 2)
+  mock.state.topicDetailCalls = [];
+  mock.state.pageTopicCommentCalls = [];
+  mock.state.commentsCountById["1001"] = 2;
+  mock.state.commentsById["1001"] = [
+    {
+      commentId: "cm-author-1",
+      userName: "阿哲",
+      isAuthor: true,
+      likeCount: 3,
+      gmtCreate: 1795520100,
+      content: "更详细的「IP 纯净度三步自检法」补充在这里：\n第一步：先查欺诈分。",
+    },
+    {
+      commentId: "cm-water-2",
+      userName: "路人",
+      isAuthor: false,
+      likeCount: 0,
+      gmtCreate: 1795520200,
+      content: "插眼",
+    },
+  ];
+
+  const secondCollect = await collector.collect({
+    sourceId: "scys-highlights",
+    config: { mode: "highlights", pageScene: "good", pageSize: 5, fetchDetail: true, maxDetailPerRun: 5 },
+    cursor: null,
+    maxItems: 10,
+    http: {} as never,
+    log: () => {},
+  });
+  assert.equal(mock.state.topicDetailCalls.length, 0, "已有完整正文的帖子只需补抓评论，不应重拉 topicDetail");
+  assert.equal(mock.state.pageTopicCommentCalls.length, 1);
+  assert.equal(mock.state.pageTopicCommentCalls[0]?.entityId, "1001");
+  assert.equal(mock.state.pageTopicCommentCalls[0]?.commentPageSize, 50);
+  ingestItems("scys-highlights", secondCollect.items);
+
+  const storedAfterRefresh = get<{ id: number; content: string }>(
+    "SELECT id, content FROM items WHERE external_id = 'scys-topic-xq_topic-1001'",
+  )!;
+  assert.ok(storedAfterRefresh.content.includes("💬 阿哲 [楼主·👍3]: 更详细的「IP 纯净度三步自检法」补充在这里："));
+  assert.equal(storedAfterRefresh.content.includes("插眼"), false);
+
+  // 评论数未再增长时，第 3 轮巡检应零请求跳过
+  mock.state.pageTopicCommentCalls = [];
+  await collector.collect({
+    sourceId: "scys-highlights",
+    config: { mode: "highlights", pageScene: "good", pageSize: 5, fetchDetail: true, maxDetailPerRun: 5 },
+    cursor: null,
+    maxItems: 10,
+    http: {} as never,
+    log: () => {},
+  });
+  assert.equal(mock.state.pageTopicCommentCalls.length, 0, "评论数未变化时不应重复调用 pageTopicComment");
+
+  // 3) 单帖手动同步 syncScysItemComments：含 MCP_RATE_LIMITED (isError=true) 自动退避重试，立即拉取新增追答并落库
+  mock.state.toolRateLimitOnce = true;
+  mock.state.commentsById["1001"]!.push({
+    commentId: "cm-qa-3",
+    userName: "小鹏",
+    isAuthor: false,
+    likeCount: 4,
+    gmtCreate: 1795520500,
+    content: "实测老号权重高更容易过验证。",
+  });
+  const syncRes = await syncScysItemComments(storedAfterRefresh.id, {
+    client: new ScysMcpClient({ minIntervalMs: 0, maxConcurrencyPerSlot: 3 }),
+  });
+  assert.equal(syncRes.totalComments, 3);
+  assert.equal(syncRes.keptComments, 2);
+  assert.ok(syncRes.content.includes("💬 小鹏 [👍4]: 实测老号权重高更容易过验证。"));
+
+  // 4) 非生财社区帖（如项目库、航海手册或外部社区源带 raw.id）必须拒绝同步并明确报错
+  assert.equal(
+    extractScysTopicIdentity({
+      external_id: "scys-project-201",
+      url: "https://scys.com/opportunity/detail/201",
+      raw: JSON.stringify({ id: 201, projectId: 201 }),
+    }),
+    null,
+  );
+  assert.equal(
+    extractScysTopicIdentity({
+      external_id: "v2ex-998877",
+      url: "https://www.v2ex.com/t/998877",
+      raw: JSON.stringify({ id: 998877 }),
+    }),
+    null,
+  );
+  const nonTopicInsert = run(
+    `INSERT INTO items (source_id, external_id, url, url_key, title, raw, first_seen_at, last_seen_at)
+     VALUES ('scys-projects', 'scys-project-999', 'https://scys.com/opportunity/detail/999', 'scys.com/opportunity/detail/999', '项目库案例', '{"id":999,"projectId":999}', datetime('now'), datetime('now'))`,
+  );
+  await assert.rejects(
+    () => syncScysItemComments(Number(nonTopicInsert.lastInsertRowid)),
+    (err: unknown) => err instanceof Error && err.message.includes("不是生财有术社区帖子"),
+  );
+});
+
+test("两级评论脱水：本地硬规则拦截短水评/表情/已中标 + gpt-6.1-terra:medium 合批语义剔除长彩虹屁并清理历史残留", async () => {
+  // 1) 验证评论专用模型路由 resolveCommentModel
+  assert.equal(resolveCommentModel({ ...DEFAULT_AI_SETTINGS, model: "gpt-6.2-sol:high" }), "gpt-6.1-terra:medium");
+  assert.equal(resolveCommentModel({ ...DEFAULT_AI_SETTINGS, model: "gpt-6:high" }), "gpt-6.1-terra:medium");
+  assert.equal(resolveCommentModel({ ...DEFAULT_AI_SETTINGS, model: "gpt-5@xhigh" }), "gpt-6.1-terra:medium");
+  assert.equal(resolveCommentModel({ ...DEFAULT_AI_SETTINGS, model: "deepseek-reasoner:high" }), "deepseek-reasoner:medium");
+  process.env.AI_COMMENT_MODEL = "gpt-6.1-terra:low";
+  assert.equal(resolveCommentModel({ ...DEFAULT_AI_SETTINGS, model: "gpt-6.2-sol:high" }), "gpt-6.1-terra:low");
+  process.env.AI_COMMENT_MODEL = "";
+
+  // 2) Stage 1 本地 0 Token 硬规则：直接清零「很棒很棒」「棒！！！」「[强][强][强]」「感谢分享，已中标」及楼中楼「好」字尾巴
+  assert.equal(extractSubstantiveCommentText("<p>棒！！！</p>"), "棒");
+  assert.equal(extractSubstantiveCommentText("[强][强][强] 👏👏"), "");
+
+  const pureWaterCandidates = prepareScysCommentCandidates([
+    { commentId: "w1", userName: "茜", content: "<p>很棒很棒</p>", likeCount: 3, isAuthor: false, gmtCreate: 1 },
+    { commentId: "w2", userName: "Davy", content: "<p>棒！！！</p>", likeCount: 5, isAuthor: false, gmtCreate: 2 },
+    { commentId: "w3", userName: "三言", content: "[强][强][强]", likeCount: 2, isAuthor: false, gmtCreate: 3 },
+    { commentId: "w4", userName: "亦仁", content: "感谢分享，已中标", likeCount: 1, isAuthor: false, gmtCreate: 4 },
+    { commentId: "w5", userName: "楼主甲", content: "谢谢大家支持！", likeCount: 2, isAuthor: true, gmtCreate: 5 },
+  ]);
+  assert.equal(pureWaterCandidates.length, 0, "全水评帖应在 Stage 1 直接清零，零 AI 请求");
+
+  // 3) Stage 2 合批 AI 语义脱水：拦截长彩虹屁与无解答报错，保留实操讨论并剪除楼中楼礼貌尾巴
+  const mixedCandidates = prepareScysCommentCandidates([
+    {
+      commentId: "m1",
+      userName: "奔跑的大黄",
+      isAuthor: false,
+      likeCount: 2,
+      gmtCreate: 10,
+      content: "视频内容和形式都太棒了👏👏正好自己也在纠结选择什么项目长期深耕，值得反复学习后慎重选择",
+    },
+    {
+      commentId: "m2",
+      userName: "大帅",
+      isAuthor: false,
+      likeCount: 1,
+      gmtCreate: 20,
+      content: "现在已经 335.8 万了，能让 AI 自动上传 Skill 吗？",
+      replies: [
+        { commentId: "mr1", userName: "亦仁", isAuthor: true, gmtCreate: 21, content: "可以的，点击发布入口即可通过生财 MCP 上传 skill。" },
+        { commentId: "mr2", userName: "大帅", isAuthor: false, gmtCreate: 22, content: "<p>好</p>" },
+      ],
+    },
+  ]);
+  // mr2 "<p>好</p>" 已在 Stage 1 被 SUB_REPLY_ACK_ONLY_RE 剪掉，剩余 m1(彩虹屁) 与 m2(闭环问答) 进入 Stage 2
+  assert.equal(mixedCandidates.length, 2);
+  assert.equal(mixedCandidates[0]?.replies.length, 1);
+
+  const requestedModels: string[] = [];
+  const mockAiFetch: typeof fetch = async (_input, init) => {
+    const reqBody = JSON.parse(String(init?.body)) as { model: string; reasoning_effort?: string; messages: Array<{ content: string }> };
+    requestedModels.push(`${reqBody.model}:${reqBody.reasoning_effort ?? ""}`);
+    const sentBatch = JSON.parse(reqBody.messages[1]?.content ?? "[]") as Array<{
+      postIndex: number;
+      comments: Array<{ id: string; text: string; replies?: Array<{ id: string }> }>;
+    }>;
+    const verdicts = sentBatch.map((post) => {
+      const keepIds: string[] = [];
+      const keepReplyIds: string[] = [];
+      for (const c of post.comments) {
+        if (!c.text.includes("值得反复学习")) {
+          keepIds.push(c.id);
+          for (const r of c.replies ?? []) keepReplyIds.push(r.id);
+        }
+      }
+      return { postIndex: post.postIndex, keepIds, keepReplyIds };
+    });
+    return new Response(
+      JSON.stringify({ choices: [{ message: { content: JSON.stringify(verdicts) } }] }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+
+  const aiCfg = {
+    ...DEFAULT_AI_SETTINGS,
+    enabled: true,
+    baseUrl: "http://127.0.0.1:8317/v1",
+    apiKey: "test-key",
+    model: "gpt-6.2-sol:high",
+  };
+
+  const [distilled] = await distillCommentPostsWithAi(
+    [{ title: "【超级标】Skill 代表作", candidates: mixedCandidates }],
+    { aiSettings: aiCfg, fetchImpl: mockAiFetch },
+  );
+  assert.deepEqual(requestedModels, ["gpt-6.1-terra:medium"]);
+  assert.equal(distilled?.length, 1, "长彩虹屁 m1 被 AI 剔除，仅保留闭环问答 m2");
+  const rendered = renderDistilledScysComments(distilled ?? []);
+  assert.equal(rendered.lines.length, 1);
+  assert.equal(rendered.lines[0]?.includes("值得反复学习"), false);
+  assert.ok(rendered.lines[0]?.includes("通过生财 MCP 上传 skill"));
+
+  // 4) 单帖重洗回归：历史残留全水评「很棒很棒 / 棒！！！」经 syncScysItemComments 重洗后应彻底移除【精选评论】尾块
+  saveScysAuth({
+    mcpUrl: `${mock.state.baseUrl}/shengcai-web/mcp`,
+    clientId: "mock-client-123",
+    accessToken: "access-token-1",
+    refreshToken: "refresh-token-1",
+    expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+    tokenEndpoint: `${mock.state.baseUrl}/mcp-oauth/token`,
+    updatedAt: new Date().toISOString(),
+  });
+  mock.state.commentsById["2026"] = [
+    { commentId: "bad1", userName: "茜", content: "<p>很棒很棒</p>", likeCount: 0, isAuthor: false },
+    { commentId: "bad2", userName: "Davy", content: "<p>棒！！！</p>", likeCount: 0, isAuthor: false },
+  ];
+  const dirtyInsert = run(
+    `INSERT INTO items (source_id, external_id, url, url_key, title, content, first_seen_at, last_seen_at)
+     VALUES ('scys-latest', 'scys-topic-xq_topic-2026', 'https://scys.com/articleDetail/xq_topic/2026', 'scys.com/articleDetail/xq_topic/2026', '从零做 AI 自媒体到接到第一张商单', '主帖干货正文\n\n【精选评论】\n💬 茜: <p>很棒很棒</p>\n💬 Davy: <p>棒！！！</p>', datetime('now'), datetime('now'))`,
+  );
+  const recleaned = await syncScysItemComments(Number(dirtyInsert.lastInsertRowid), {
+    client: new ScysMcpClient({ minIntervalMs: 0 }),
+    aiSettings: aiCfg,
+    aiModel: "gpt-6.2-sol:medium",
+    fetchImpl: mockAiFetch,
+  });
+  assert.equal(recleaned.keptComments, 0);
+  assert.equal(recleaned.content, "主帖干货正文", "全水评帖重洗后必须剥除【精选评论】空壳");
+
+  // 显式 aiModel 覆写透传验证（非全水评时应使用传入的 aiModel 而非回退默认）
+  mock.state.commentsById["2027"] = [
+    { commentId: "good1", userName: "实测派", content: "实测老号 0 余额绑卡直接过验证，记得立刻关自动续费。", likeCount: 2, isAuthor: false },
+  ];
+  const overrideInsert = run(
+    `INSERT INTO items (source_id, external_id, url, url_key, title, content, first_seen_at, last_seen_at)
+     VALUES ('scys-latest', 'scys-topic-xq_topic-2027', 'https://scys.com/articleDetail/xq_topic/2027', 'scys.com/articleDetail/xq_topic/2027', '黑五绑卡实测', '主帖正文', datetime('now'), datetime('now'))`,
+  );
+  requestedModels.length = 0;
+  const overrideRes = await syncScysItemComments(Number(overrideInsert.lastInsertRowid), {
+    client: new ScysMcpClient({ minIntervalMs: 0 }),
+    aiSettings: aiCfg,
+    aiModel: "gpt-6.2-sol:medium",
+    fetchImpl: mockAiFetch,
+  });
+  assert.deepEqual(requestedModels, ["gpt-6.2-sol:medium"]);
+  assert.equal(overrideRes.keptComments, 1);
 });

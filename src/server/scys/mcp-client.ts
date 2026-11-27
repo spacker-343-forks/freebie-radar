@@ -3,7 +3,8 @@ import { get, run } from "../db.ts";
 
 export const DEFAULT_SCYS_MCP_URL = "https://mcp.scys.com/shengcai-web/mcp";
 export const SCYS_AUTH_SETTINGS_KEY = "scys_mcp_auth";
-export const DEFAULT_MIN_INTERVAL_MS = 3200;
+export const DEFAULT_MIN_INTERVAL_MS = 1000;
+export const DEFAULT_MAX_CONCURRENCY_PER_SLOT = 3;
 export const MAX_SCYS_AUTH_SLOTS = 5;
 export const TOKEN_REFRESH_MARGIN_MS = 120_000;
 
@@ -25,6 +26,8 @@ export const SCYS_READONLY_TOOLS: ReadonlySet<string> = new Set([
   "searchTrustedContent",
   "getDailyReport",
   "ai__listAiFeedItems",
+  "listMyChatGroups",
+  "getMyChatGroupMessages",
 ]);
 
 export function isReadOnlyScysTool(name: string): boolean {
@@ -568,12 +571,22 @@ function parseRetryAfterMs(header: string | null, fallbackMs: number): number {
   return fallbackMs;
 }
 
+function parseMcpToolRateLimit(msg: string): { waitMs: number; userScoped: boolean } | null {
+  if (!/MCP_RATE_LIMITED|rate[_\s-]*limit/i.test(msg)) return null;
+  const secMatch =
+    /retryAfterSeconds\s*=\s*(\d+(?:\.\d+)?)/i.exec(msg) ?? /sleep\s+(\d+(?:\.\d+)?)\s*s/i.exec(msg);
+  const secs = secMatch ? Number(secMatch[1]) : 1;
+  const waitMs = Math.max(1000, Math.ceil((Number.isFinite(secs) && secs > 0 ? secs : 1) * 1000) + 150);
+  return { waitMs, userScoped: /dimension\s*=\s*USER/i.test(msg) };
+}
+
 function sleep(ms: number): Promise<void> {
   return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
 }
 
 export type ScysMcpClientOptions = {
   minIntervalMs?: number;
+  maxConcurrencyPerSlot?: number;
   maxRetries?: number;
   fetchFn?: FetchLike;
   loadAuth?: () => ScysAuthState | null;
@@ -588,15 +601,19 @@ type SlotWorker = {
   sessionId: string | null;
   initialized: boolean;
   lastRequestAt: number;
+  nextDispatchAt: number;
+  cooldownUntil: number;
   reservedUntil: number;
   inFlight: number;
-  serialQueue: Promise<void>;
+  activeCount: number;
+  waitQueue: Array<() => void>;
   refreshInFlight: Promise<ScysAuthState> | null;
   initInFlight: Promise<void> | null;
 };
 
 export class ScysMcpClient {
   private readonly minIntervalMs: number;
+  private readonly maxConcurrencyPerSlot: number;
   private readonly maxRetries: number;
   private readonly fetchFn: FetchLike;
   private readonly loadPoolFn: () => ScysAuthPool | null;
@@ -604,12 +621,17 @@ export class ScysMcpClient {
 
   private pool: ScysAuthPool | null = null;
   private slotWorkers: SlotWorker[] = [];
+  private readonly toolCooldownUntil = new Map<string, number>();
   private nextRpcId = 1;
   private rrCursor = 0;
 
   constructor(options: ScysMcpClientOptions = {}) {
     this.minIntervalMs = options.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS;
-    this.maxRetries = options.maxRetries ?? 2;
+    this.maxConcurrencyPerSlot = Math.max(
+      1,
+      Math.min(12, Math.round(options.maxConcurrencyPerSlot ?? DEFAULT_MAX_CONCURRENCY_PER_SLOT)),
+    );
+    this.maxRetries = options.maxRetries ?? 3;
     this.fetchFn = options.fetchFn ?? fetch;
 
     if (options.loadPool) {
@@ -651,9 +673,12 @@ export class ScysMcpClient {
         sessionId: null,
         initialized: false,
         lastRequestAt: 0,
+        nextDispatchAt: 0,
+        cooldownUntil: 0,
         reservedUntil: 0,
         inFlight: 0,
-        serialQueue: Promise.resolve(),
+        activeCount: 0,
+        waitQueue: [],
         refreshInFlight: null,
         initInFlight: null,
       }));
@@ -664,6 +689,14 @@ export class ScysMcpClient {
   getSlotCount(): number {
     if (this.slotWorkers.length) return this.slotWorkers.length;
     return this.loadPoolFn()?.slots.length ?? 0;
+  }
+
+  getMaxConcurrencyPerSlot(): number {
+    return this.maxConcurrencyPerSlot;
+  }
+
+  getConcurrencyCapacity(): number {
+    return Math.max(1, this.getSlotCount()) * this.maxConcurrencyPerSlot;
   }
 
   private isTokenExpiringSoon(state: ScysAuthState): boolean {
@@ -702,18 +735,52 @@ export class ScysMcpClient {
     return worker.refreshInFlight;
   }
 
-  private enqueueSerial<T>(worker: SlotWorker, fn: () => Promise<T>): Promise<T> {
-    const task = worker.serialQueue.then(async () => {
-      const wait = worker.lastRequestAt + this.minIntervalMs - Date.now();
-      if (wait > 0) await sleep(wait);
-      worker.lastRequestAt = Date.now();
-      return fn();
+  private async acquirePermit(worker: SlotWorker): Promise<void> {
+    if (worker.activeCount < this.maxConcurrencyPerSlot) {
+      worker.activeCount += 1;
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      worker.waitQueue.push(resolve);
     });
-    worker.serialQueue = task.then(
-      () => undefined,
-      () => undefined,
-    );
-    return task;
+  }
+
+  private releasePermit(worker: SlotWorker): void {
+    const next = worker.waitQueue.shift();
+    if (next) {
+      next();
+    } else {
+      worker.activeCount = Math.max(0, worker.activeCount - 1);
+    }
+  }
+
+  private async runPacedOnSlot<T>(worker: SlotWorker, fn: () => Promise<T>, toolName?: string): Promise<T> {
+    await this.acquirePermit(worker);
+    try {
+      while (true) {
+        const now = Date.now();
+        const toolCd = toolName ? (this.toolCooldownUntil.get(toolName) ?? 0) : 0;
+        const effectiveCooldown = Math.max(worker.cooldownUntil, toolCd);
+        const scheduledAt = Math.max(
+          now,
+          effectiveCooldown,
+          worker.nextDispatchAt,
+          worker.lastRequestAt + this.minIntervalMs,
+        );
+        worker.nextDispatchAt = scheduledAt + this.minIntervalMs;
+        if (scheduledAt > now) {
+          await sleep(scheduledAt - now);
+        }
+        const wakeCd = Math.max(worker.cooldownUntil, toolName ? (this.toolCooldownUntil.get(toolName) ?? 0) : 0);
+        if (Date.now() < wakeCd) {
+          continue;
+        }
+        worker.lastRequestAt = Date.now();
+        return await fn();
+      }
+    } finally {
+      this.releasePermit(worker);
+    }
   }
 
   private acquireSlot(): SlotWorker {
@@ -728,8 +795,8 @@ export class ScysMcpClient {
       const w = this.slotWorkers[idx]!;
       const readyAt =
         w.inFlight > 0
-          ? Math.max(now, w.reservedUntil)
-          : Math.max(now, w.lastRequestAt + this.minIntervalMs);
+          ? Math.max(now, w.reservedUntil, w.nextDispatchAt)
+          : Math.max(now, w.nextDispatchAt, w.lastRequestAt + this.minIntervalMs);
       if (readyAt < bestScore || (readyAt === bestScore && w.inFlight < best.inFlight)) {
         best = w;
         bestScore = readyAt;
@@ -739,7 +806,8 @@ export class ScysMcpClient {
     this.rrCursor = (best.index + 1) % n;
     best.inFlight += 1;
     best.reservedUntil =
-      Math.max(now, best.reservedUntil, best.lastRequestAt + this.minIntervalMs) + this.minIntervalMs;
+      Math.max(now, best.reservedUntil, best.nextDispatchAt, best.lastRequestAt + this.minIntervalMs) +
+      this.minIntervalMs;
     return best;
   }
 
@@ -760,6 +828,8 @@ export class ScysMcpClient {
   ): Promise<unknown> {
     let authRefreshedFor401 = false;
 
+    const toolName = method === "tools/call" && typeof params?.name === "string" ? params.name : undefined;
+
     for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
       const auth = await this.ensureValidToken(worker, false);
       const id = isNotification ? undefined : this.nextRpcId++;
@@ -768,21 +838,25 @@ export class ScysMcpClient {
         : { jsonrpc: "2.0", id, method, ...(params ? { params } : {}) };
       const sentSessionId = worker.sessionId;
 
-      const res = await this.enqueueSerial(worker, async () => {
-        const headers: Record<string, string> = {
-          "content-type": "application/json",
-          accept: "application/json, text/event-stream",
-          authorization: `Bearer ${auth.accessToken}`,
-        };
-        if (sentSessionId) {
-          headers["mcp-session-id"] = sentSessionId;
-        }
-        return this.fetchFn(auth.mcpUrl || DEFAULT_SCYS_MCP_URL, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(payload),
-        });
-      });
+      const res = await this.runPacedOnSlot(
+        worker,
+        async () => {
+          const headers: Record<string, string> = {
+            "content-type": "application/json",
+            accept: "application/json, text/event-stream",
+            authorization: `Bearer ${auth.accessToken}`,
+          };
+          if (sentSessionId) {
+            headers["mcp-session-id"] = sentSessionId;
+          }
+          return this.fetchFn(auth.mcpUrl || DEFAULT_SCYS_MCP_URL, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(payload),
+          });
+        },
+        toolName,
+      );
 
       const returnedSessionId = res.headers.get("mcp-session-id");
       if (returnedSessionId) {
@@ -799,6 +873,9 @@ export class ScysMcpClient {
       }
       if (res.status === 429 && attempt < this.maxRetries) {
         const waitMs = parseRetryAfterMs(res.headers.get("retry-after"), Math.max(this.minIntervalMs, 5000));
+        const until = Date.now() + waitMs;
+        worker.cooldownUntil = Math.max(worker.cooldownUntil, until);
+        worker.nextDispatchAt = Math.max(worker.nextDispatchAt, until);
         await sleep(waitMs);
         continue;
       }
@@ -925,44 +1002,61 @@ export class ScysMcpClient {
     const worker = this.acquireSlot();
     try {
       await this.initializeSlot(worker);
-      const result = (await this.postJsonRpcOnSlot(worker, "tools/call", { name, arguments: args })) as {
-        isError?: boolean;
-        structuredContent?: unknown;
-        content?: Array<{ type?: string; text?: string }>;
-      };
+      for (let rlAttempt = 0; rlAttempt <= this.maxRetries; rlAttempt += 1) {
+        const result = (await this.postJsonRpcOnSlot(worker, "tools/call", { name, arguments: args })) as {
+          isError?: boolean;
+          structuredContent?: unknown;
+          content?: Array<{ type?: string; text?: string }>;
+        };
 
-      if (result?.isError) {
-        const msg =
-          result.content
-            ?.map((c) => c.text ?? "")
-            .filter(Boolean)
-            .join("\n") || "MCP tool returned isError=true";
-        throw new Error(`scys-mcp 工具 ${name} 返回错误: ${msg}`);
-      }
-
-      if (result?.structuredContent !== undefined) {
-        return result.structuredContent as T;
-      }
-
-      const texts = (result?.content ?? [])
-        .filter((c) => c?.type === "text" && typeof c.text === "string")
-        .map((c) => c.text!);
-
-      if (texts.length === 1) {
-        const single = texts[0]!.trim();
-        if (single.startsWith("{") || single.startsWith("[")) {
-          try {
-            return JSON.parse(single) as T;
-          } catch {
-            /* return raw text */
+        if (result?.isError) {
+          const msg =
+            result.content
+              ?.map((c) => c.text ?? "")
+              .filter(Boolean)
+              .join("\n") || "MCP tool returned isError=true";
+          const rl = parseMcpToolRateLimit(msg);
+          if (rl && rlAttempt < this.maxRetries) {
+            const until = Date.now() + rl.waitMs;
+            worker.cooldownUntil = Math.max(worker.cooldownUntil, until);
+            worker.nextDispatchAt = Math.max(worker.nextDispatchAt, until);
+            if (rl.userScoped) {
+              this.toolCooldownUntil.set(name, Math.max(this.toolCooldownUntil.get(name) ?? 0, until));
+              for (const w of this.slotWorkers) {
+                w.nextDispatchAt = Math.max(w.nextDispatchAt, until);
+              }
+            }
+            await sleep(rl.waitMs);
+            continue;
           }
+          throw new Error(`scys-mcp 工具 ${name} 返回错误: ${msg}`);
         }
-        return single as T;
+
+        if (result?.structuredContent !== undefined) {
+          return result.structuredContent as T;
+        }
+
+        const texts = (result?.content ?? [])
+          .filter((c) => c?.type === "text" && typeof c.text === "string")
+          .map((c) => c.text!);
+
+        if (texts.length === 1) {
+          const single = texts[0]!.trim();
+          if (single.startsWith("{") || single.startsWith("[")) {
+            try {
+              return JSON.parse(single) as T;
+            } catch {
+              /* return raw text */
+            }
+          }
+          return single as T;
+        }
+        if (texts.length > 1) {
+          return texts.join("\n") as T;
+        }
+        return result as T;
       }
-      if (texts.length > 1) {
-        return texts.join("\n") as T;
-      }
-      return result as T;
+      throw new Error(`scys-mcp 工具 ${name} 触发限流且重试耗尽`);
     } finally {
       worker.inFlight = Math.max(0, worker.inFlight - 1);
     }
@@ -973,6 +1067,7 @@ export type ToolIntent = {
   keyword?: string;
   tag?: string;
   pageSize?: number;
+  commentPageSize?: number;
   page?: number;
   cursor?: string | null;
   topicId?: string;
@@ -985,7 +1080,7 @@ export type ToolIntent = {
   orderBy?: string;
   gmtCreateStart?: number;
   gmtCreateEnd?: number;
-  sortType?: string;
+  sortType?: string | number;
   mode?: "highlights" | "projects" | "latest" | "manuals";
   compact?: boolean;
 };
@@ -1047,11 +1142,16 @@ export function buildToolArgs(
     }
   }
 
-  if (intent.pageSize !== undefined) {
-    let bounded = Math.max(1, intent.pageSize);
+  const effectivePageSize = intent.commentPageSize ?? intent.pageSize;
+  if (effectivePageSize !== undefined) {
+    let bounded = Math.max(1, effectivePageSize);
     if (toolName === "searchTopic") bounded = Math.min(10, bounded);
+    if (toolName === "pageTopicComment") bounded = Math.min(50, bounded);
     if (toolName === "contentSearch" && !props.displayMode) bounded = Math.min(5, bounded);
-    const key = hasProps ? pickProp(props, ["pageSize", "limit", "size", "count", "perPage", "num"]) : "pageSize";
+    const defaultSizeKey = toolName === "pageTopicComment" ? "commentPageSize" : "pageSize";
+    const key = hasProps
+      ? pickProp(props, ["commentPageSize", "pageSize", "limit", "size", "count", "perPage", "num"])
+      : defaultSizeKey;
     if (key) out[key] = bounded;
   }
 
@@ -1063,7 +1163,7 @@ export function buildToolArgs(
     if (key) out[key] = intent.page;
   }
 
-  if (toolName === "topicDetail") {
+  if (toolName === "topicDetail" || toolName === "pageTopicComment") {
     if (!hasProps || (props.entityType && props.entityId)) {
       out.entityType = intent.entityType || "xq_topic";
       if (intent.entityId || intent.topicId) {
@@ -1108,7 +1208,7 @@ export function buildToolArgs(
   if (intent.gmtCreateEnd !== undefined && (!hasProps || props.gmtCreateEnd)) {
     out.gmtCreateEnd = intent.gmtCreateEnd;
   }
-  if (intent.sortType && (!hasProps || props.sortType)) {
+  if (intent.sortType !== undefined && (!hasProps || props.sortType)) {
     out.sortType = intent.sortType;
   }
 
