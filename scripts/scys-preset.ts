@@ -54,7 +54,7 @@ const SCYS_BLOCK_RULES = [
   "纯晒单",
 ];
 
-const ENABLED_SCYS_IDS = ["scys-highlights", "scys-projects", "scys-latest"] as const;
+const ENABLED_SCYS_IDS = ["scys-highlights", "scys-projects", "scys-latest", "scys-trusted", "scys-ai-feed"] as const;
 
 export function applyScysPreset() {
   const version = migrate();

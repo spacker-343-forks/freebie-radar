@@ -42,6 +42,8 @@
 | :--- | :--- |
 | `src/server/scys/mcp-client.ts`<br>`scripts/scys-auth.ts` | 生财 MCP (`https://mcp.scys.com/shengcai-web/mcp`) Stateless Streamable HTTP 客户端、OAuth 2.1 + PKCE + DCR 登录续签、`Mcp-Session-Id` 过期重连及多槽位并发连接池（存于 `settings.scys_mcp_auth`）。 |
 | `src/server/collectors/scys.ts`<br>`src/server/scys/comment-ai.ts` | 生财两阶段采集器（Stage 1 列表检索 + Stage 2 并发详情与 `pageTopicComment` 评论补全），内置「0 Token 规则预筛 + `gpt-6.1-terra:medium` 批量语义脱水」两级评论精选漏斗、评论数增长增量回访（独立幂等表 `scys_comment_sync`）及旧版 `8,000` 字截断记录自动重抓自愈。 |
+| `src/server/collectors/scys-trusted.ts`<br>`scripts/scys-trusted-backfill.ts` | 金矿 1 收录文库采集器（`searchTrustedContent` + `getTrustedContentSection` 多段续读无损拼接至 50 万字），覆盖微信公众号（`wechat_mp`）、X 推文（`twitter`）与航海家群聊精华（`navigator_chat_highlight`，无权限自动降级）。 |
+| `src/shared/scys-official-report.ts`<br>`src/server/scys-official-report.ts`<br>`src/server/collectors/scys-ai-feed.ts`<br>`scripts/scys-reports-backfill.ts` | 金矿 3 官方每日 9 点内参日报归档（`getDailyReport` 含周末合辑与结构化兜底渲染，独立幂等表 `scys_official_reports`）与官方 AI 情报流采集器（`ai__listAiFeedItems`）。 |
 | `src/server/enrich/ai-settings.ts` | 支持 `<model>:<effort>`（如 `gpt-6.2-sol:high`，自动映射 `reasoning_effort` 并省略 `temperature`）、HTML 标签清洗与 6,000 字送审窗口、主端点配额耗尽自动 6h 熔断切换至 `AI_FALLBACK_BASE_URL`、以及深度模型路由 `resolveDeepModel`。 |
 | `src/shared/digest.ts`<br>`src/server/digest.ts`<br>`src/web/src/components/DigestPanel.tsx` | AI 主编结构化每日精选与周报（独立拆分 `threshold` 底牌门槛字段、候选池真实链接覆写防幻觉、兼容解析旧版纯文本、移动端「站内读全文 + 生财原帖」双胶囊）。 |
 | `src/web/src/lib/snapshot.ts`<br>`src/web/src/components/SnapshotContent.tsx` | 零 XSS 白名单正文快照阅读器：自动识别生财 Tiptap HTML 与 Markdown，渲染标题、图文、可复制代码块、飞书文档与精选评论卡片。 |
@@ -68,6 +70,8 @@ pnpm scys:reclassify    # 0 Token 幂等存量商业赛道分类重映射与假�
 pnpm scys:backfill      # 多分区分页历史回溯与流式 AI 脱水（支持断点续跑）
 pnpm scys:manuals       # 遍历历期大航海目录，无损抓取全部实战手册章节（支持偏移续传）
 pnpm scys:comments      # 高并发批量补抓存量生财帖评论区（楼主补充/楼中楼追答/高赞实测，支持断点续跑与 --id 单帖同步）
+pnpm scys:trusted       # 批量回溯大佬公众号/推文/航海家群聊精华库（支持 --source-types/--month/--pages/--reset）
+pnpm scys:reports       # 同步与回补生财官方 9 点内参日报（--days/--date/--force）及官方 AI 情报流（--ai-feed）
 pnpm scys:burn          # 批量合成《赛道实战白皮书》(--tracks) 与《实战立项拆解书》(--dossiers)
 ```
 
