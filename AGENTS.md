@@ -90,3 +90,8 @@ pnpm scys:burn          # 批量合成《赛道实战白皮书》(--tracks) 与�
 4. **密钥、真实姓名与隐私红线**：
    - 严禁将 `.env`、任何真实 API Key、`ADMIN_TOKEN`、OAuth Token、`data/radar.db*` 或 `data/scys-tools-schema.json` 硬编码或提交进 Git 仓库。
    - 严禁修改工作电脑全局 `~/.gitconfig`；严禁在本项目 Git 提交作者（Author / Committer）或代码文档中出现个人真实姓名与企业邮箱，本项目内所有 Git 操作统一通过仓库级 `--local` 配置固定为 `spacker-343 <67576022+spacker-343@users.noreply.github.com>`。
+5. **代码任务收尾强制闭环（自检 → 自动整理提交 → 确认后落盘推送）**：
+   - 凡涉及代码、脚本或项目文档修改的任务，在完成开发并通过本地检查门禁（`pnpm typecheck`、`pnpm test`，涉及前端时含 `pnpm build` 与 `pnpm i18n:check`）后，**严禁直接停在汇报测试结果**，必须自动串联收尾链路：
+     1. 先执行 `checkai` 独立代码审查并闭环修复发现的问题；
+     2. 紧接着**自动触发 `commitsplitter`（阶段一）整理提交**，过滤临时文件并隔离其他并行在途修改（严禁 `git add -A` / `git add .`），主动向用户输出按单一职责拆分的中文 Header + Body 提交方案并等待确认（`"同意"` / `"Go"`）；
+     3. 收到用户明确确认后，校验仓库级 `spacker-343` 身份执行本地提交并自动 `git push` 至 `origin/scys-radar`。
