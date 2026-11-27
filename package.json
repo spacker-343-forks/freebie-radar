@@ -28,6 +28,7 @@
     "scys:tools": "tsx scripts/scys-auth.ts --tools",
     "scys:backfill": "tsx scripts/scys-backfill.ts",
     "scys:manuals": "tsx scripts/scys-manuals-backfill.ts",
+    "scys:chats": "tsx scripts/scys-chats.ts",
     "scys:comments": "tsx scripts/scys-comments-backfill.ts",
     "scys:trusted": "tsx scripts/scys-trusted-backfill.ts",
     "scys:reports": "tsx scripts/scys-reports-backfill.ts",

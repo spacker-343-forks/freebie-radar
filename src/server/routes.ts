@@ -1,4 +1,4 @@
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { all, get, run, tx, dbRevision, type SqlValue } from "./db.ts";
 import { registerSecurity, registerPublicCache, limitUserAction, adminHostAllowed } from "./security.ts";
 import { reconcileSourceCategory, getSourceHints, getManualClassification } from "./source-settings.ts";
@@ -716,10 +716,18 @@ const PUBLIC_GET_EXACT = new Set([
   "/api/rss",
   "/api/upstream-watch",
   "/api/tracks",
+  "/api/manuals",
   "/api/scys/daily-reports",
 ]);
 
-const PUBLIC_GET_PREFIX = ["/api/items/", "/api/digests/", "/api/tracks/", "/api/scys/daily-reports/"];
+const PUBLIC_GET_PREFIX = [
+  "/api/items/",
+  "/api/digests/",
+  "/api/tracks/",
+  "/api/manuals/",
+  "/api/chat-radar/",
+  "/api/scys/daily-reports/",
+];
 
 let warnedNoAdminToken = false;
 let warnedAdminLocked = false;
@@ -728,6 +736,7 @@ export function registerApi(app: Hono) {
   ensureDossierTable();
   ensureTracksTable();
   ensureScysOfficialReportTable();
+  ensureChatRadarTables();
   registerSecurity(app);
   /**
    * 鉴权分层（顺序即优先级）：
@@ -2374,6 +2383,210 @@ const fetchLimit = Math.min(Math.max(offset + limit * 3, 240), 600);
       console.error("[tracks] 后台合成失败:", err instanceof Error ? err.message : err);
     });
     return c.json({ ok: true, running: true });
+  });
+
+  /* ---------------------------------------------------------------- *
+   * 航海实战手册整书书架 & 63 个高纯度生财微信群雷达
+   * ---------------------------------------------------------------- */
+
+  const chatRadarReadable = (c: Context): boolean => {
+    const viewer = identityOf(c);
+    const publicSite = viewer.siteMode === "public" || config.siteMode === "public";
+    return !publicSite || viewer.isAdmin;
+  };
+
+  app.get("/api/manuals", (c) => {
+    const q = c.req.query("q");
+    const books = listManualBooks({ q });
+    if (!chatRadarReadable(c)) {
+      return c.json({ books: books.map((b) => ({ ...b, linkedGroups: [] })) });
+    }
+    return c.json({ books });
+  });
+
+  app.get("/api/manuals/chapters/:itemId", (c) => {
+    const itemId = Number(c.req.param("itemId"));
+    if (!Number.isSafeInteger(itemId) || itemId < 1) {
+      return c.json({ error: "章节 ID 无效" }, 400);
+    }
+    const chapter = getManualChapter(itemId);
+    if (!chapter) return c.json({ error: "未找到该手册章节" }, 404);
+    return c.json({ chapter });
+  });
+
+  app.get("/api/manuals/:activityId", (c) => {
+    const activityId = c.req.param("activityId").trim();
+    if (!activityId) return c.json({ error: "手册 ID 无效" }, 400);
+    const book = getManualBookDetail(activityId);
+    if (!book) return c.json({ error: "未找到该航海手册" }, 404);
+    if (!chatRadarReadable(c)) {
+      return c.json({ book: { ...book, linkedGroups: [] } });
+    }
+    return c.json({ book });
+  });
+
+  app.get("/api/chat-radar/groups", (c) => {
+    if (!chatRadarReadable(c)) {
+      return c.json({ error: "公开演示站不开放私密微信群聊记录", needAuth: true }, 403);
+    }
+    const rawTier = c.req.query("tier");
+    const tier: ChatGroupTier | undefined =
+      rawTier === "core" || rawTier === "voyage" || rawTier === "regional" ? rawTier : undefined;
+    const enabledOnly = c.req.query("enabledOnly") === "1" || c.req.query("enabledOnly") === "true";
+    const activityId = c.req.query("activityId");
+    const q = c.req.query("q");
+    return c.json(getChatGroupsOverview({ tier, enabledOnly, activityId, q }));
+  });
+
+  app.get("/api/chat-radar/digests", (c) => {
+    if (!chatRadarReadable(c)) {
+      return c.json({ error: "公开演示站不开放私密微信群聊记录", needAuth: true }, 403);
+    }
+    const groupKey = c.req.query("groupKey");
+    const activityId = c.req.query("activityId");
+    const category = c.req.query("category");
+    const q = c.req.query("q");
+    const limitRaw = Number(c.req.query("limit"));
+    const limit = Number.isFinite(limitRaw) ? limitRaw : undefined;
+    return c.json(listChatDigests({ groupKey, activityId, category, q, limit }));
+  });
+
+  app.get("/api/chat-radar/messages/context", (c) => {
+    if (!chatRadarReadable(c)) {
+      return c.json({ error: "公开演示站不开放私密微信群聊记录", needAuth: true }, 403);
+    }
+    const groupKey = (c.req.query("groupKey") ?? "").trim();
+    const msgTime = Number(c.req.query("msgTime"));
+    const windowRaw = Number(c.req.query("window"));
+    if (!groupKey || !Number.isFinite(msgTime) || msgTime <= 0) {
+      return c.json({ error: "groupKey 与 msgTime 必填" }, 400);
+    }
+    const ctx = getChatMessageContext(
+      groupKey,
+      msgTime,
+      Number.isFinite(windowRaw) && windowRaw > 0 ? windowRaw : 15,
+    );
+    if (!ctx) return c.json({ error: "未找到该群聊记录" }, 404);
+    return c.json(ctx);
+  });
+
+  app.get("/api/chat-radar/messages", (c) => {
+    if (!chatRadarReadable(c)) {
+      return c.json({ error: "公开演示站不开放私密微信群聊记录", needAuth: true }, 403);
+    }
+    const q = c.req.query("q");
+    const groupKey = c.req.query("groupKey");
+    const activityId = c.req.query("activityId");
+    const rawTier = c.req.query("tier");
+    const tier: ChatGroupTier | undefined =
+      rawTier === "core" || rawTier === "voyage" || rawTier === "regional" ? rawTier : undefined;
+    const includeNoise = c.req.query("includeNoise") === "1" || c.req.query("includeNoise") === "true";
+    const limitRaw = Number(c.req.query("limit"));
+    const offsetRaw = Number(c.req.query("offset"));
+    return c.json(
+      searchChatMessages({
+        q,
+        groupKey,
+        activityId,
+        tier,
+        includeNoise,
+        limit: Number.isFinite(limitRaw) ? limitRaw : undefined,
+        offset: Number.isFinite(offsetRaw) ? offsetRaw : undefined,
+      }),
+    );
+  });
+
+  app.post("/api/chat-radar/sync", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      discover?: boolean;
+      distill?: boolean;
+      groupKey?: string;
+      activityId?: string;
+      tier?: string;
+      lookbackDays?: number;
+      maxPagesPerGroup?: number;
+      concurrency?: number;
+      model?: string;
+    };
+    try {
+      if (body.discover === true) {
+        await syncChatGroupsCatalog();
+      }
+      const tier: ChatGroupTier | undefined =
+        body.tier === "core" || body.tier === "voyage" || body.tier === "regional"
+          ? body.tier
+          : undefined;
+      const syncRes = await syncChatGroupMessages({
+        groupKey: typeof body.groupKey === "string" ? body.groupKey : undefined,
+        activityId: typeof body.activityId === "string" ? body.activityId : undefined,
+        tier,
+        lookbackDays: typeof body.lookbackDays === "number" ? body.lookbackDays : undefined,
+        maxPagesPerGroup:
+          typeof body.maxPagesPerGroup === "number" ? body.maxPagesPerGroup : undefined,
+        concurrency: typeof body.concurrency === "number" ? body.concurrency : undefined,
+      });
+      let distillRes: Awaited<ReturnType<typeof distillChatGroupInsights>> | null = null;
+      if (body.distill === true) {
+        distillRes = await distillChatGroupInsights({
+          groupKey: typeof body.groupKey === "string" ? body.groupKey : undefined,
+          activityId: typeof body.activityId === "string" ? body.activityId : undefined,
+          model: typeof body.model === "string" ? body.model : undefined,
+        });
+      }
+      return c.json({
+        ok: true,
+        ...syncRes,
+        syncedGroups: syncRes.groupsSynced,
+        ...(distillRes
+          ? { distill: distillRes, insertedDigests: distillRes.digestsCreated }
+          : {}),
+      });
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  });
+
+  app.post("/api/chat-radar/distill", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      groupKey?: string;
+      activityId?: string;
+      model?: string;
+      limitGroups?: number;
+      minPendingMessages?: number;
+    };
+    try {
+      const res = await distillChatGroupInsights({
+        groupKey: typeof body.groupKey === "string" ? body.groupKey : undefined,
+        activityId: typeof body.activityId === "string" ? body.activityId : undefined,
+        model: typeof body.model === "string" ? body.model : undefined,
+        limitGroups: typeof body.limitGroups === "number" ? body.limitGroups : undefined,
+        minPendingMessages:
+          typeof body.minPendingMessages === "number" ? body.minPendingMessages : undefined,
+      });
+      return c.json({
+        ok: true,
+        ...res,
+        insertedDigests: res.digestsCreated,
+      });
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  });
+
+  app.patch("/api/chat-radar/groups/:groupKey", async (c) => {
+    let groupKey = c.req.param("groupKey");
+    try {
+      groupKey = decodeURIComponent(groupKey);
+    } catch {
+      /* keep raw */
+    }
+    const body = (await c.req.json().catch(() => null)) as { enabled?: unknown } | null;
+    if (!body || typeof body.enabled !== "boolean") {
+      return c.json({ error: "enabled 必须为布尔值" }, 400);
+    }
+    const group = setChatGroupEnabled(groupKey, body.enabled);
+    if (!group) return c.json({ error: "未找到该微信群" }, 404);
+    return c.json({ ok: true, group });
   });
 
   /* ================================================================== *
