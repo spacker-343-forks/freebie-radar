@@ -24,6 +24,7 @@ export const SCYS_READONLY_TOOLS: ReadonlySet<string> = new Set([
   "activityList",
   "activitySearch",
   "searchTrustedContent",
+  "getTrustedContentSection",
   "getDailyReport",
   "ai__listAiFeedItems",
   "listMyChatGroups",
@@ -1083,6 +1084,14 @@ export type ToolIntent = {
   sortType?: string | number;
   mode?: "highlights" | "projects" | "latest" | "manuals";
   compact?: boolean;
+  sourceType?: string;
+  accountKey?: string;
+  month?: string;
+  itemId?: string;
+  sectionId?: string;
+  offset?: number;
+  maxChars?: number;
+  lang?: "zh" | "original";
 };
 
 function pickProp(props: Record<string, Record<string, unknown>>, candidates: string[]): string | null {
@@ -1146,6 +1155,7 @@ export function buildToolArgs(
   if (effectivePageSize !== undefined) {
     let bounded = Math.max(1, effectivePageSize);
     if (toolName === "searchTopic") bounded = Math.min(10, bounded);
+    if (toolName === "searchTrustedContent") bounded = Math.min(20, bounded);
     if (toolName === "pageTopicComment") bounded = Math.min(50, bounded);
     if (toolName === "contentSearch" && !props.displayMode) bounded = Math.min(5, bounded);
     const defaultSizeKey = toolName === "pageTopicComment" ? "commentPageSize" : "pageSize";
@@ -1210,6 +1220,30 @@ export function buildToolArgs(
   }
   if (intent.sortType !== undefined && (!hasProps || props.sortType)) {
     out.sortType = intent.sortType;
+  }
+  if (intent.sourceType && (!hasProps || props.sourceType)) {
+    out.sourceType = intent.sourceType;
+  }
+  if (intent.accountKey && (!hasProps || props.accountKey)) {
+    out.accountKey = intent.accountKey;
+  }
+  if (intent.month && (!hasProps || props.month)) {
+    out.month = intent.month;
+  }
+  if (intent.itemId && (!hasProps || props.itemId)) {
+    out.itemId = String(intent.itemId);
+  }
+  if (intent.sectionId && (!hasProps || props.sectionId)) {
+    out.sectionId = String(intent.sectionId);
+  }
+  if (intent.offset !== undefined && (!hasProps || props.offset)) {
+    out.offset = Math.max(0, Math.floor(intent.offset));
+  }
+  if (intent.maxChars !== undefined && (!hasProps || props.maxChars)) {
+    out.maxChars = Math.min(50_000, Math.max(1, Math.floor(intent.maxChars)));
+  }
+  if (intent.lang && (!hasProps || props.lang)) {
+    out.lang = intent.lang;
   }
 
   if (intent.compact && toolName === "searchTopic") {
